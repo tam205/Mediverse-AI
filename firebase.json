@@ -1,0 +1,27 @@
+﻿{
+  "database": {
+    "rules": "database.rules.json"
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "mediverse-ai-86",
+          "appId": "1:662044894018:android:63d1800338fcdbe746dedb",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "mediverse-ai-86",
+          "configurations": {
+            "android": "1:662044894018:android:63d1800338fcdbe746dedb",
+            "ios": "1:662044894018:ios:bcd6f25c7be8e52e46dedb",
+            "web": "1:662044894018:web:68847ea96b7f8e1446dedb",
+            "windows": "1:662044894018:web:0e65d02a03b4f95646dedb"
+          }
+        }
+      }
+    }
+  }
+}

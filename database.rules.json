@@ -1,0 +1,18 @@
+{
+  "rules": {
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    },
+    "medicines": {
+      ".read": "auth != null",
+      ".write": false
+    },
+    "interactions": {
+      ".read": "auth != null",
+      ".write": false
+    }
+  }
+}

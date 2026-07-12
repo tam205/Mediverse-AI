@@ -1,0 +1,997 @@
+import 'package:flutter/material.dart';
+
+import '../../core/navigation/nav_extensions.dart';
+import '../../core/theme/app_colors.dart';
+import '../../shared/widgets/app_card.dart';
+import '../../shared/widgets/app_chrome.dart';
+import '../../shared/widgets/buttons.dart';
+import '../../shared/widgets/form_fields.dart';
+import '../../shared/widgets/section_header.dart';
+import '../history/services/history_repository.dart';
+import '../profile/models/health_profile.dart';
+import '../profile/services/health_profile_repository.dart';
+import '../shared/interaction_list.dart';
+import 'interaction_result.dart';
+import 'medicine_details_screen.dart';
+import 'models/medicine.dart';
+import 'result_screen.dart';
+import 'services/interaction_engine.dart';
+import 'services/medicine_repository.dart';
+
+class DrugCheckerScreen extends StatefulWidget {
+  const DrugCheckerScreen({super.key});
+
+  @override
+  State<DrugCheckerScreen> createState() => _DrugCheckerScreenState();
+}
+
+class _DrugCheckerScreenState extends State<DrugCheckerScreen> {
+  final _repository = const MedicineRepository();
+  final _profileRepository = const HealthProfileRepository();
+  final _historyRepository = const HistoryRepository();
+  final _engine = const InteractionEngine();
+  final _searchController = TextEditingController();
+  final _drugControllers = [TextEditingController(), TextEditingController()];
+  late Future<List<Medicine>> _suggestionsFuture;
+  late Future<HealthProfile> _profileFuture;
+  bool _checking = false;
+  bool _profileUnavailable = false;
+
+  List<String> get _selectedMedicines {
+    final medicines = <String, String>{};
+    for (final controller in _drugControllers) {
+      final medicine = controller.text.trim();
+      if (medicine.isNotEmpty) {
+        medicines.putIfAbsent(medicine.toLowerCase(), () => medicine);
+      }
+    }
+    return medicines.values.toList();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _suggestionsFuture = _repository.searchMedicines('');
+    _profileFuture = _profileRepository.getProfile();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    for (final controller in _drugControllers) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  void _search(String value) {
+    setState(() => _suggestionsFuture = _repository.searchMedicines(value));
+  }
+
+  void _addMedicine(String name) {
+    final normalized = name.trim().toLowerCase();
+    if (normalized.isEmpty) return;
+
+    final exists = _drugControllers.any(
+      (controller) => controller.text.trim().toLowerCase() == normalized,
+    );
+    if (exists) return;
+
+    final emptyIndex = _drugControllers.indexWhere(
+      (controller) => controller.text.trim().isEmpty,
+    );
+    setState(() {
+      if (emptyIndex == -1) {
+        _drugControllers.add(TextEditingController(text: name.trim()));
+      } else {
+        _drugControllers[emptyIndex].text = name.trim();
+      }
+    });
+  }
+
+  void _removeMedicine(int index) {
+    if (_drugControllers.length <= 2) {
+      setState(() => _drugControllers[index].clear());
+      return;
+    }
+    final controller = _drugControllers.removeAt(index);
+    controller.dispose();
+    setState(() {});
+  }
+
+  void _addCurrentMedicines(HealthProfile profile) {
+    for (final medicine in profile.currentMedicines) {
+      _addMedicine(medicine);
+    }
+  }
+
+  Future<void> _checkInteraction(HealthProfile profile) async {
+    final medicines = _selectedMedicines;
+    final savedMedicines = _profileUnavailable
+        ? const <String>[]
+        : profile.currentMedicines;
+    final combinedMedicineCount = {
+      ...medicines.map((medicine) => medicine.toLowerCase()),
+      ...savedMedicines.map((medicine) => medicine.toLowerCase()),
+    }.length;
+
+    if (combinedMedicineCount < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Please select at least two different medicines, or add current medicines to your health profile.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _checking = true);
+    try {
+      final result = await _engine.check(
+        medicines,
+        profile: _profileUnavailable ? null : profile,
+      );
+      if (!mounted) return;
+      await _saveHistory(result, !_profileUnavailable);
+      if (!mounted) return;
+      context.pushScreen(ResultScreen(result: result, savedToHistory: true));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'We could not complete the safety check. Please try again.',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
+
+  Future<void> _saveHistory(
+    InteractionResultCopy result,
+    bool profileIncluded,
+  ) async {
+    try {
+      await _historyRepository.saveInteraction(
+        result,
+        medicines: _selectedMedicines,
+        profileIncluded: profileIncluded,
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('The check completed, but history was not saved.'),
+        ),
+      );
+    }
+  }
+
+  void _retryProfile() {
+    setState(() {
+      _profileUnavailable = false;
+      _profileFuture = _profileRepository.getProfile();
+    });
+  }
+
+  void _showHowItWorks() {
+    showDialog<void>(
+      context: context,
+      builder: (_) => const _HowItWorksDialog(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.canvas,
+      appBar: AppBar(
+        title: const Text('Medicine Safety Check'),
+        backgroundColor: AppColors.deepNavy,
+        foregroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        iconTheme: const IconThemeData(color: Colors.white),
+        titleTextStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.w700,
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'How it works',
+            icon: const Icon(Icons.help_outline),
+            onPressed: _showHowItWorks,
+          ),
+        ],
+      ),
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFFEAF7F5), Color(0xFFF7FBFA), Color(0xFFFFFFFF)],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ),
+        ),
+        child: ScreenPadding(
+          child: FutureBuilder<HealthProfile>(
+            future: _profileFuture,
+            builder: (context, profileSnapshot) {
+              if (profileSnapshot.connectionState == ConnectionState.waiting) {
+                return const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _DrugCheckerHero(medicineCount: 0, profileReady: false),
+                    SizedBox(height: 14),
+                    _LoadingProfileCard(),
+                  ],
+                );
+              }
+
+              final hasProfileError = profileSnapshot.hasError;
+              final profile = hasProfileError
+                  ? HealthProfile.empty
+                  : profileSnapshot.data ?? HealthProfile.empty;
+              _profileUnavailable = hasProfileError;
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _DrugCheckerHero(
+                    medicineCount: _selectedMedicines.length,
+                    profileReady: !hasProfileError,
+                  ),
+                  const SizedBox(height: 14),
+                  if (hasProfileError)
+                    _ProfileErrorCard(onRetry: _retryProfile)
+                  else
+                    _ProfileSafetyCard(
+                      profile: profile,
+                      onAddCurrentMedicines: () =>
+                          _addCurrentMedicines(profile),
+                    ),
+                  const SizedBox(height: 18),
+                  _MedicineSearchSection(
+                    controller: _searchController,
+                    suggestionsFuture: _suggestionsFuture,
+                    onSearch: _search,
+                    onAddMedicine: _addMedicine,
+                  ),
+                  const SizedBox(height: 18),
+                  _CompareMedicinesSection(
+                    controllers: _drugControllers,
+                    selectedCount: _selectedMedicines.length,
+                    onAddEmpty: () => setState(
+                      () => _drugControllers.add(TextEditingController()),
+                    ),
+                    onRemove: _removeMedicine,
+                    onMedicineChanged: () => setState(() {}),
+                  ),
+                  const SizedBox(height: 14),
+                  PrimaryButton(
+                    label: _checking
+                        ? 'Checking safety...'
+                        : 'Check for safety concerns',
+                    onPressed: _checking
+                        ? null
+                        : () => _checkInteraction(profile),
+                  ),
+                  const SizedBox(height: 14),
+                  const _MedicalDisclaimerNote(),
+                  const SizedBox(height: 14),
+                  const _PrivacyNote(),
+                  const SizedBox(height: 28),
+                  const SectionHeader(
+                    title: 'Recent safety checks',
+                    action: 'View all',
+                  ),
+                  const SizedBox(height: 12),
+                  const InteractionList(),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DrugCheckerHero extends StatelessWidget {
+  const _DrugCheckerHero({
+    required this.medicineCount,
+    required this.profileReady,
+  });
+
+  final int medicineCount;
+  final bool profileReady;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [AppColors.deepNavy, AppColors.deepTeal, AppColors.ocean],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.ocean.withValues(alpha: .18),
+            blurRadius: 22,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: .14),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: const Icon(
+                  Icons.health_and_safety_outlined,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Check medicine safety',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 21,
+                        height: 1.15,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Compare medicines and identify possible safety concerns based on your health profile.',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: .82),
+                        fontWeight: FontWeight.w400,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 10,
+            runSpacing: 10,
+            children: [
+              _HeroMetric(
+                icon: Icons.medication_liquid_outlined,
+                label: '$medicineCount selected',
+              ),
+              _HeroMetric(
+                icon: profileReady
+                    ? Icons.verified_user_outlined
+                    : Icons.info_outline,
+                label: profileReady
+                    ? 'Health profile included'
+                    : 'Health profile not included',
+              ),
+              const _HeroMetric(
+                icon: Icons.security_outlined,
+                label: 'Private and secure',
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HeroMetric extends StatelessWidget {
+  const _HeroMetric({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(30),
+        border: Border.all(color: Colors.white24),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: AppColors.aqua, size: 16),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HowItWorksDialog extends StatelessWidget {
+  const _HowItWorksDialog();
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('How it works'),
+      content: const Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _StepRow(
+            number: '1',
+            title: 'Choose medicines',
+            body: 'Search or type the medicines you want to compare.',
+          ),
+          _StepRow(
+            number: '2',
+            title: 'Use your health profile',
+            body:
+                'Saved allergies, conditions, and treatments improve safety context.',
+          ),
+          _StepRow(
+            number: '3',
+            title: 'Read clear guidance',
+            body:
+                'See no known concern found, caution advised, or high-risk warning with practical next steps.',
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
+
+class _StepRow extends StatelessWidget {
+  const _StepRow({
+    required this.number,
+    required this.title,
+    required this.body,
+  });
+
+  final String number;
+  final String title;
+  final String body;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 26,
+            height: 26,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              color: AppColors.ocean,
+              shape: BoxShape.circle,
+            ),
+            child: Text(
+              number,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  body,
+                  style: const TextStyle(color: AppColors.muted, height: 1.35),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoadingProfileCard extends StatelessWidget {
+  const _LoadingProfileCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return const AppCard(
+      child: Row(
+        children: [
+          SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Loading your health profile so saved allergies, conditions, and treatments can be included.',
+              style: TextStyle(color: AppColors.muted, height: 1.35),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileErrorCard extends StatelessWidget {
+  const _ProfileErrorCard({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline, color: AppColors.amber),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Health profile not included',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'We could not load your health profile. You can continue with a general medicine check or try again.',
+                  style: TextStyle(color: AppColors.muted, height: 1.35),
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Try again'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProfileSafetyCard extends StatelessWidget {
+  const _ProfileSafetyCard({
+    required this.profile,
+    required this.onAddCurrentMedicines,
+  });
+
+  final HealthProfile profile;
+  final VoidCallback onAddCurrentMedicines;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: AppColors.emerald.withValues(alpha: .13),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(
+                  Icons.verified_user_outlined,
+                  color: AppColors.emerald,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Personalized safety check enabled',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    SizedBox(height: 3),
+                    Text(
+                      'Your saved allergies, conditions, and treatments will be considered during this check.',
+                      style: TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _SafetyPill(
+                icon: Icons.warning_amber_outlined,
+                label: 'Allergies: ${profile.allergies.length}',
+                color: AppColors.amber,
+              ),
+              _SafetyPill(
+                icon: Icons.medication_outlined,
+                label: 'Treatments: ${profile.currentMedicines.length}',
+                color: AppColors.ocean,
+              ),
+              _SafetyPill(
+                icon: Icons.monitor_heart_outlined,
+                label: 'Conditions: ${profile.chronicDiseases.length}',
+                color: AppColors.sky,
+              ),
+            ],
+          ),
+          if (profile.currentMedicines.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: onAddCurrentMedicines,
+              icon: const Icon(Icons.add),
+              label: const Text('Include my saved medicines'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _MedicineSearchSection extends StatelessWidget {
+  const _MedicineSearchSection({
+    required this.controller,
+    required this.suggestionsFuture,
+    required this.onSearch,
+    required this.onAddMedicine,
+  });
+
+  final TextEditingController controller;
+  final Future<List<Medicine>> suggestionsFuture;
+  final ValueChanged<String> onSearch;
+  final ValueChanged<String> onAddMedicine;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Find a medicine',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Search by generic or brand name.',
+            style: TextStyle(color: AppColors.muted, height: 1.35),
+          ),
+          const SizedBox(height: 14),
+          MediverseTextField(
+            hint: 'Search by medicine name',
+            controller: controller,
+            prefixIcon: Icons.search,
+            textInputAction: TextInputAction.search,
+            onChanged: onSearch,
+          ),
+          const SizedBox(height: 12),
+          FutureBuilder<List<Medicine>>(
+            future: suggestionsFuture,
+            builder: (context, snapshot) {
+              final medicines = snapshot.data ?? Medicine.demo;
+              return Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: medicines.take(6).map((medicine) {
+                  return MedicineSuggestionChip(
+                    medicine: medicine,
+                    onView: () => context.pushScreen(
+                      MedicineDetailsScreen(name: medicine.name),
+                    ),
+                    onAdd: () => onAddMedicine(medicine.name),
+                  );
+                }).toList(),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class MedicineSuggestionChip extends StatelessWidget {
+  const MedicineSuggestionChip({
+    super.key,
+    required this.medicine,
+    required this.onView,
+    required this.onAdd,
+  });
+
+  final Medicine medicine;
+  final VoidCallback onView;
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: medicine.color.withValues(alpha: .08),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onView,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.medication_outlined, size: 18, color: medicine.color),
+              const SizedBox(width: 7),
+              Text(
+                medicine.name,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: 'Add medicine',
+                visualDensity: VisualDensity.compact,
+                onPressed: onAdd,
+                icon: const Icon(Icons.add, size: 18),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompareMedicinesSection extends StatelessWidget {
+  const _CompareMedicinesSection({
+    required this.controllers,
+    required this.selectedCount,
+    required this.onAddEmpty,
+    required this.onRemove,
+    required this.onMedicineChanged,
+  });
+
+  final List<TextEditingController> controllers;
+  final int selectedCount;
+  final VoidCallback onAddEmpty;
+  final ValueChanged<int> onRemove;
+  final VoidCallback onMedicineChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'Selected medicines',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.ocean.withValues(alpha: .10),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '$selectedCount selected',
+                  style: const TextStyle(
+                    color: AppColors.ocean,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Select at least two medicines, including prescriptions, non-prescription medicines, and supplements.',
+            style: TextStyle(color: AppColors.muted, height: 1.35),
+          ),
+          const SizedBox(height: 14),
+          ...controllers.asMap().entries.map(
+            (entry) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: MediverseTextField(
+                hint: entry.key == 0
+                    ? 'For example, paracetamol'
+                    : entry.key == 1
+                    ? 'For example, ibuprofen'
+                    : 'Medicine name',
+                controller: entry.value,
+                prefixIcon: Icons.medication_liquid_outlined,
+                suffixIcon: entry.value.text.trim().isNotEmpty
+                    ? Icons.close
+                    : null,
+                suffixIconTooltip: 'Remove medicine',
+                onSuffixIconPressed: () => onRemove(entry.key),
+                onChanged: (_) => onMedicineChanged(),
+              ),
+            ),
+          ),
+          TextButton.icon(
+            onPressed: onAddEmpty,
+            icon: const Icon(Icons.add),
+            label: const Text('Add another medicine'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SafetyPill extends StatelessWidget {
+  const _SafetyPill({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: .22)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 16, color: color),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.ink,
+              fontWeight: FontWeight.w600,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MedicalDisclaimerNote extends StatelessWidget {
+  const _MedicalDisclaimerNote();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.amber.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.amber.withValues(alpha: .24)),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline, color: AppColors.amber, size: 20),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'This tool provides general medicine-safety information. It does not replace advice from a doctor or pharmacist. Do not start, stop, or change a medicine without professional guidance.',
+              style: TextStyle(
+                color: AppColors.ink,
+                height: 1.35,
+                fontWeight: FontWeight.w400,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PrivacyNote extends StatelessWidget {
+  const _PrivacyNote();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.ocean.withValues(alpha: .08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.ocean.withValues(alpha: .18)),
+      ),
+      child: const Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.lock_outline, color: AppColors.ocean, size: 20),
+          SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Your medicine checks are stored securely in your private account.',
+              style: TextStyle(
+                color: AppColors.ocean,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

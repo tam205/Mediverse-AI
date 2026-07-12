@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "662044894018",
+    "project_id": "mediverse-ai-86",
+    "firebase_url": "https://mediverse-ai-86-default-rtdb.firebaseio.com",
+    "storage_bucket": "mediverse-ai-86.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:662044894018:android:63d1800338fcdbe746dedb",
+        "android_client_info": {
+          "package_name": "com.example.mediverse_ai"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCdbSJxJ7sJNCARoQ1SuXD5OgubhpQowjs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
