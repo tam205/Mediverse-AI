@@ -2,15 +2,17 @@ import 'package:flutter/material.dart';
 
 import '../../core/navigation/nav_extensions.dart';
 import '../../core/theme/app_colors.dart';
+import '../../shared/utils/firebase_error_messages.dart';
 import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_chrome.dart';
-import '../../shared/utils/firebase_error_messages.dart';
 import '../auth/login_screen.dart';
 import '../auth/services/auth_service.dart';
-import 'edit_health_profile_screen.dart';
 import '../professional/help_emergency_screen.dart';
 import '../professional/privacy_security_screen.dart';
 import '../professional/settings_screen.dart';
+import 'allergies_screen.dart';
+import 'current_medicines_screen.dart';
+import 'edit_health_profile_screen.dart';
 import 'health_profile_screen.dart';
 import 'models/health_profile.dart';
 import 'profile_detail_screen.dart';
@@ -28,6 +30,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   final _repository = const HealthProfileRepository();
   late Stream<HealthProfile> _profileStream;
+  bool _savingRole = false;
 
   @override
   void initState() {
@@ -47,6 +50,41 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
     );
     if (updated == true) _reloadProfile();
+  }
+
+  Future<void> _selectRole(HealthProfile profile) async {
+    final selectedRole = await showModalBottomSheet<UserRole>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) =>
+          _RoleSelectionSheet(selectedRole: profile.primaryRole),
+    );
+    if (selectedRole == null || selectedRole == profile.primaryRole) return;
+
+    setState(() => _savingRole = true);
+    try {
+      await _repository.saveProfile(
+        profile.copyWith(
+          primaryRole: selectedRole,
+          lastUpdated: DateTime.now(),
+        ),
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Use type updated.')));
+    } catch (error, stackTrace) {
+      debugPrint('Role update failed: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('We could not update your use type. Please try again.'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _savingRole = false);
+    }
   }
 
   @override
@@ -83,129 +121,171 @@ class _ProfileScreenState extends State<ProfileScreen> {
               children: [
                 _ProfileHeader(
                   profile: profile,
-                  onEdit: () => _editProfile(profile),
+                  savingRole: _savingRole,
+                  onComplete: () => _editProfile(profile),
+                  onChangeRole: () => _selectRole(profile),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 14),
                 _CompletionCard(profile: profile),
-                const SizedBox(height: 12),
-                _SafetySummaryCard(profile: profile),
-                const SizedBox(height: 18),
-                _ProfileTile(
-                  icon: Icons.person_outline,
-                  label: 'Personal Information',
-                  status: _status(profile.phone.isNotEmpty),
-                  onTap: () => context.pushScreen(
-                    ProfileDetailScreen(
-                      title: 'Personal Information',
+                const SizedBox(height: 20),
+                _ProfileSectionGroup(
+                  title: 'Account information',
+                  children: [
+                    _ProfileMenuTile(
                       icon: Icons.person_outline,
-                      items: [
-                        ('Name', profile.name),
-                        ('Email', profile.email),
-                        ('Phone', profile.phone),
-                        ('Date of birth', profile.dateOfBirth),
-                        ('Gender', profile.gender),
-                        ('Country', profile.country),
-                        ('Language', profile.language),
-                        ('Last updated', profile.lastUpdatedLabel),
-                      ],
+                      title: 'Personal details',
+                      subtitle: _personalDetailsSummary(profile),
+                      onTap: () => context.pushScreen(
+                        ProfileDetailScreen(
+                          title: 'Personal details',
+                          icon: Icons.person_outline,
+                          items: [
+                            ('Full name', _valueOrNotAdded(profile.name)),
+                            ('Email', _valueOrNotAdded(profile.email)),
+                            (
+                              'Age',
+                              profile.age > 0
+                                  ? '${profile.age}'
+                                  : 'Not added yet',
+                            ),
+                            ('Country', _valueOrNotAdded(profile.country)),
+                            (
+                              'Blood group',
+                              _valueOrNotAdded(profile.bloodGroup),
+                            ),
+                            ('Language', _valueOrNotAdded(profile.language)),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
+                    _ProfileMenuTile(
+                      icon: Icons.badge_outlined,
+                      title: 'Use type',
+                      subtitle:
+                          '${_roleLabel(profile.primaryRole)}. You can change this later.',
+                      trailingText: _savingRole ? 'Saving...' : null,
+                      onTap: _savingRole ? null : () => _selectRole(profile),
+                    ),
+                  ],
                 ),
-                _ProfileTile(
-                  icon: Icons.medical_information_outlined,
-                  label: 'Medical Profile',
-                  status: profile.currentMedicines.isEmpty
-                      ? 'Incomplete'
-                      : 'Added',
-                  onTap: () => context.pushScreen(const HealthProfileScreen()),
+                _RoleInformationGroup(
+                  profile: profile,
+                  onEditHealthProfile: () => _editProfile(profile),
                 ),
-                _ProfileTile(
-                  icon: Icons.warning_amber_outlined,
-                  label: 'Allergies',
-                  status: profile.allergies.isEmpty ? 'Not added' : 'Added',
-                  onTap: () => context.pushScreen(
-                    ProfileDetailScreen(
+                _ProfileSectionGroup(
+                  title: 'Health and medicine',
+                  children: [
+                    _ProfileMenuTile(
+                      icon: Icons.health_and_safety_outlined,
                       title: 'Allergies',
-                      icon: Icons.warning_amber_outlined,
-                      items: [
-                        ('Recorded allergies', _allergySummary(profile)),
-                        ('Last updated', profile.lastUpdatedLabel),
-                      ],
+                      subtitle: _allergiesOverviewSummary(profile),
+                      onTap: () => context.pushScreen(const AllergiesScreen()),
                     ),
-                  ),
-                ),
-                _ProfileTile(
-                  icon: Icons.medication_outlined,
-                  label: 'Current Medicines',
-                  status: profile.currentMedicines.isEmpty
-                      ? 'Not added'
-                      : 'Added',
-                  onTap: () => context.pushScreen(
-                    ProfileDetailScreen(
-                      title: 'Current Medicines',
+                    _ProfileMenuTile(
                       icon: Icons.medication_outlined,
-                      items: [
-                        ('Medicines', _listOrNone(profile.currentMedicines)),
-                        ('Used for', 'Future interaction and safety checks'),
-                        ('Last updated', profile.lastUpdatedLabel),
-                      ],
+                      title: 'Current medicines',
+                      subtitle: _currentMedicinesOverviewSummary(profile),
+                      onTap: () =>
+                          context.pushScreen(const CurrentMedicinesScreen()),
                     ),
-                  ),
-                ),
-                _ProfileTile(
-                  icon: Icons.contact_emergency_outlined,
-                  label: 'Emergency Contact',
-                  status: profile.hasEmergencyContact ? 'Added' : 'Not added',
-                  onTap: () => context.pushScreen(
-                    ProfileDetailScreen(
-                      title: 'Emergency Contact',
+                    _ProfileMenuTile(
+                      icon: Icons.favorite_border,
+                      title: 'Health conditions',
+                      subtitle: _conditionsSummary(profile),
+                      onTap: () =>
+                          context.pushScreen(const HealthProfileScreen()),
+                    ),
+                    _ProfileMenuTile(
                       icon: Icons.contact_emergency_outlined,
-                      items: [
-                        ('Name', profile.emergencyName),
-                        ('Relationship', profile.emergencyRelationship),
-                        ('Country code', profile.emergencyCountryCode),
-                        ('Phone', profile.emergencyPhone),
-                        ('Last updated', profile.lastUpdatedLabel),
-                      ],
+                      title: 'Emergency information',
+                      subtitle: profile.hasEmergencyContact
+                          ? '${profile.emergencyRelationship}: ${profile.emergencyName}'
+                          : 'Optional. Not added yet',
+                      onTap: () => context.pushScreen(
+                        ProfileDetailScreen(
+                          title: 'Emergency information',
+                          icon: Icons.contact_emergency_outlined,
+                          items: [
+                            (
+                              'Emergency contact',
+                              _valueOrNotAdded(profile.emergencyName),
+                            ),
+                            (
+                              'Relationship',
+                              _valueOrNotAdded(profile.emergencyRelationship),
+                            ),
+                            (
+                              'Phone number',
+                              profile.hasEmergencyContact
+                                  ? '${profile.emergencyCountryCode} ${profile.emergencyPhone}'
+                                  : 'Not added yet',
+                            ),
+                            ('Last updated', profile.lastUpdatedLabel),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-                _ProfileTile(
-                  icon: Icons.privacy_tip_outlined,
-                  label: 'Privacy & Security',
-                  status: profile.dataConsent ? 'Consent saved' : 'Review',
-                  onTap: () =>
-                      context.pushScreen(const PrivacySecurityScreen()),
+                _ProfileSectionGroup(
+                  title: 'Preferences',
+                  children: [
+                    _ProfileMenuTile(
+                      icon: Icons.language,
+                      title: 'Language',
+                      subtitle: _valueOrNotAdded(profile.language),
+                      onTap: () => context.pushScreen(const LanguageScreen()),
+                    ),
+                    _ProfileMenuTile(
+                      icon: Icons.notifications_none,
+                      title: 'Notifications',
+                      subtitle: 'Medicine reminders enabled',
+                      onTap: () => context.pushScreen(const SettingsScreen()),
+                    ),
+                  ],
                 ),
-                _ProfileTile(
-                  icon: Icons.medical_information_outlined,
-                  label: 'Medical Disclaimer',
-                  status: 'Visible',
-                  onTap: () =>
-                      context.pushScreen(ProfessionalPages.disclaimer()),
-                ),
-                _ProfileTile(
-                  icon: Icons.help_outline,
-                  label: 'Help & Emergency',
-                  status: 'Support',
-                  onTap: () => context.pushScreen(const HelpEmergencyScreen()),
-                ),
-                _ProfileTile(
-                  icon: Icons.info_outline,
-                  label: 'About Mediverse AI',
-                  status: 'App info',
-                  onTap: () => context.pushScreen(ProfessionalPages.about()),
-                ),
-                _ProfileTile(
-                  icon: Icons.logout,
-                  label: 'Log Out',
-                  status: '',
-                  onTap: () async {
-                    await AuthService.signOut();
-                    if (context.mounted) {
-                      context.replaceWith(const LoginScreen());
-                    }
-                  },
+                _ProfileSectionGroup(
+                  title: 'Account',
+                  children: [
+                    _ProfileMenuTile(
+                      icon: Icons.lock_outline,
+                      title: 'Account and security',
+                      subtitle: 'Password, email, and sign out',
+                      onTap: () =>
+                          context.pushScreen(const PrivacySecurityScreen()),
+                    ),
+                    _ProfileMenuTile(
+                      icon: Icons.shield_outlined,
+                      title: 'Privacy and consent',
+                      subtitle: profile.dataConsent
+                          ? 'Health-data consent saved'
+                          : 'Review health-data consent',
+                      statusColor: profile.dataConsent
+                          ? AppColors.emerald
+                          : AppColors.amber,
+                      onTap: () =>
+                          context.pushScreen(const PrivacySecurityScreen()),
+                    ),
+                    _ProfileMenuTile(
+                      icon: Icons.help_outline,
+                      title: 'Help and emergency',
+                      subtitle: 'Support and urgent-care guidance',
+                      onTap: () =>
+                          context.pushScreen(const HelpEmergencyScreen()),
+                    ),
+                    _ProfileMenuTile(
+                      icon: Icons.logout,
+                      title: 'Sign out',
+                      subtitle: 'Leave this device safely',
+                      showChevron: false,
+                      onTap: () async {
+                        await AuthService.signOut();
+                        if (context.mounted) {
+                          context.replaceWith(const LoginScreen());
+                        }
+                      },
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -219,43 +299,58 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
     return Scaffold(
       backgroundColor: AppColors.canvas,
-      appBar: MediverseAppBar(
-        title: 'Profile',
-        actions: [
-          StreamBuilder<HealthProfile>(
-            stream: _profileStream,
-            builder: (context, snapshot) {
-              final profile = snapshot.data;
-              return IconButton(
-                tooltip: 'Edit profile',
-                icon: const Icon(Icons.edit_outlined),
-                onPressed: profile == null ? null : () => _editProfile(profile),
-              );
-            },
-          ),
-        ],
-      ),
+      appBar: const MediverseAppBar(title: 'Profile'),
       body: body,
     );
   }
 
-  static String _status(bool complete) => complete ? 'Added' : 'Incomplete';
-
-  static String _listOrNone(List<String> values) {
-    if (values.isEmpty) return 'Not added';
-    return values.join(', ');
+  static String _personalDetailsSummary(HealthProfile profile) {
+    final details = <String>[];
+    if (profile.age > 0) details.add('Age ${profile.age}');
+    if (profile.country.trim().isNotEmpty) details.add(profile.country);
+    if (profile.bloodGroup.trim().isNotEmpty) details.add(profile.bloodGroup);
+    return details.isEmpty ? 'Name, country, blood group' : details.join(', ');
   }
 
-  static String _allergySummary(HealthProfile profile) {
-    if (profile.allergyEntries.isNotEmpty) {
-      return profile.allergyEntries
-          .map(
-            (allergy) =>
-                '${allergy.substance}: ${allergy.reaction} (${allergy.severity})',
-          )
-          .join('\n');
-    }
-    return _listOrNone(profile.allergies);
+  static String _conditionsSummary(HealthProfile profile) {
+    final conditions = profile.chronicDiseases;
+    if (conditions.isEmpty) return 'Not added yet';
+    if (conditions.length == 1) return conditions.first;
+    return '${conditions.length} conditions recorded';
+  }
+
+  static String _allergiesOverviewSummary(HealthProfile profile) {
+    if (!profile.allergiesReviewed) return 'Review allergies';
+    if (profile.allergies.isEmpty) return 'No known allergies';
+    return _countSummary(
+      profile.allergies.length,
+      singular: 'allergy recorded',
+      plural: 'allergies recorded',
+    );
+  }
+
+  static String _currentMedicinesOverviewSummary(HealthProfile profile) {
+    if (!profile.medicinesReviewed) return 'Review medicines';
+    if (profile.currentMedicines.isEmpty) return 'No current medicines';
+    return _countSummary(
+      profile.currentMedicines.length,
+      singular: 'medicine recorded',
+      plural: 'medicines recorded',
+    );
+  }
+
+  static String _countSummary(
+    int count, {
+    required String singular,
+    required String plural,
+  }) {
+    if (count == 0) return 'Not added yet';
+    return '$count ${count == 1 ? singular : plural}';
+  }
+
+  static String _valueOrNotAdded(String value) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? 'Not added yet' : trimmed;
   }
 }
 
@@ -308,61 +403,102 @@ class _ProfileErrorState extends StatelessWidget {
 }
 
 class _ProfileHeader extends StatelessWidget {
-  const _ProfileHeader({required this.profile, required this.onEdit});
+  const _ProfileHeader({
+    required this.profile,
+    required this.savingRole,
+    required this.onComplete,
+    required this.onChangeRole,
+  });
 
   final HealthProfile profile;
-  final VoidCallback onEdit;
+  final bool savingRole;
+  final VoidCallback onComplete;
+  final VoidCallback onChangeRole;
 
   @override
   Widget build(BuildContext context) {
+    final displayName = profile.name.trim().isEmpty
+        ? AuthService.currentUserName
+        : profile.name.trim();
+    final firstName = displayName.trim().split(RegExp(r'\s+')).first;
+
     return AppCard(
       padding: const EdgeInsets.all(18),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
-            radius: 31,
-            backgroundColor: AppColors.ocean.withValues(alpha: .14),
-            child: Text(
-              AuthService.currentUserInitials,
-              style: const TextStyle(
-                color: AppColors.ocean,
-                fontWeight: FontWeight.w900,
-                fontSize: 18,
-              ),
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  profile.name,
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 31,
+                backgroundColor: AppColors.ocean.withValues(alpha: .14),
+                child: Text(
+                  AuthService.currentUserInitials,
                   style: const TextStyle(
+                    color: AppColors.ocean,
                     fontWeight: FontWeight.w900,
                     fontSize: 18,
                   ),
                 ),
-                const SizedBox(height: 3),
-                Text(
-                  profile.email,
-                  style: const TextStyle(color: AppColors.muted),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Hello, $firstName',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 20,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        _StatusBadge(label: _roleLabel(profile.primaryRole)),
+                        if (_isProfessional(profile.primaryRole))
+                          const _StatusBadge(
+                            label: 'Verification not submitted',
+                            color: AppColors.amber,
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 8),
-                Text(
-                  'Last updated: ${profile.lastUpdatedLabel}',
-                  style: const TextStyle(
-                    color: AppColors.softMuted,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-          IconButton(
-            tooltip: 'Edit profile',
-            onPressed: onEdit,
-            icon: const Icon(Icons.edit_outlined),
+          const SizedBox(height: 16),
+          Text(
+            'Your profile is ${profile.completionPercent}% complete.',
+            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            '${profile.missingGuidance} You can complete this later.',
+            style: const TextStyle(color: AppColors.muted, height: 1.4),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: onComplete,
+                  icon: const Icon(Icons.edit_outlined),
+                  label: const Text('Complete profile'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              IconButton.outlined(
+                tooltip: 'Change use type',
+                onPressed: savingRole ? null : onChangeRole,
+                icon: const Icon(Icons.swap_horiz),
+              ),
+            ],
           ),
         ],
       ),
@@ -381,14 +517,25 @@ class _CompletionCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            'Profile ${profile.completionPercent}% complete',
-            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+          Row(
+            children: [
+              const Icon(Icons.insights_outlined, color: AppColors.ocean),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Profile ${profile.completionPercent}% complete',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 16,
+                  ),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
             profile.missingGuidance,
-            style: const TextStyle(color: AppColors.muted),
+            style: const TextStyle(color: AppColors.muted, height: 1.4),
           ),
           const SizedBox(height: 12),
           LinearProgressIndicator(
@@ -402,140 +549,336 @@ class _CompletionCard extends StatelessWidget {
   }
 }
 
-class _SafetySummaryCard extends StatelessWidget {
-  const _SafetySummaryCard({required this.profile});
+class _RoleInformationGroup extends StatelessWidget {
+  const _RoleInformationGroup({
+    required this.profile,
+    required this.onEditHealthProfile,
+  });
 
   final HealthProfile profile;
+  final VoidCallback onEditHealthProfile;
 
   @override
   Widget build(BuildContext context) {
-    return AppCard(
+    switch (profile.primaryRole) {
+      case UserRole.student:
+        return _ProfileSectionGroup(
+          title: 'Role information',
+          children: [
+            _ProfileMenuTile(
+              icon: Icons.school_outlined,
+              title: 'Learning profile',
+              subtitle: 'Study level, difficulty, and learning goals',
+              onTap: () => context.pushScreen(
+                const ProfileDetailScreen(
+                  title: 'Learning profile',
+                  icon: Icons.school_outlined,
+                  items: [
+                    ('Study level', 'Not added yet'),
+                    ('Area of study', 'Not added yet'),
+                    ('Learning goals', 'Not added yet'),
+                  ],
+                ),
+              ),
+            ),
+            _ProfileMenuTile(
+              icon: Icons.bookmark_border,
+              title: 'Learning interests',
+              subtitle: 'Pharmacology, interactions, cases, and calculations',
+              onTap: () => context.pushScreen(
+                const ProfileDetailScreen(
+                  title: 'Learning interests',
+                  icon: Icons.bookmark_border,
+                  items: [
+                    ('Saved interests', 'Not added yet'),
+                    ('Quiz progress', 'Not added yet'),
+                    ('Recent learning activity', 'Not added yet'),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        );
+      case UserRole.healthcareProfessional:
+        return _ProfileSectionGroup(
+          title: 'Role information',
+          children: [
+            _ProfileMenuTile(
+              icon: Icons.medical_services_outlined,
+              title: 'Professional profile',
+              subtitle: 'Profession, specialty, licence, and institution',
+              onTap: () => context.pushScreen(
+                const ProfileDetailScreen(
+                  title: 'Professional profile',
+                  icon: Icons.medical_services_outlined,
+                  items: [
+                    ('Professional name', 'Not added yet'),
+                    ('Profession', 'Not added yet'),
+                    ('Specialty', 'Not added yet'),
+                    ('Country of practice', 'Not added yet'),
+                    ('Registration or licence number', 'Not added yet'),
+                  ],
+                ),
+              ),
+            ),
+            _ProfileMenuTile(
+              icon: Icons.verified_user_outlined,
+              title: 'Verification status',
+              subtitle: 'Not submitted. Verification is reviewed separately.',
+              statusColor: AppColors.amber,
+              onTap: () => context.pushScreen(
+                const ProfileDetailScreen(
+                  title: 'Verification status',
+                  icon: Icons.verified_user_outlined,
+                  items: [
+                    ('Status', 'Not submitted'),
+                    ('Verified badge', 'Not shown'),
+                    (
+                      'Important',
+                      'Selecting healthcare professional does not verify this account.',
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            _ProfileMenuTile(
+              icon: Icons.health_and_safety_outlined,
+              title: 'Personal health profile',
+              subtitle: 'Optional health details for your own medicine checks',
+              onTap: onEditHealthProfile,
+            ),
+          ],
+        );
+      case UserRole.patient:
+        return _ProfileSectionGroup(
+          title: 'Role information',
+          children: [
+            _ProfileMenuTile(
+              icon: Icons.health_and_safety_outlined,
+              title: 'Personal health profile',
+              subtitle: 'Health details used for medicine safety checks',
+              onTap: onEditHealthProfile,
+            ),
+          ],
+        );
+    }
+  }
+}
+
+class _ProfileSectionGroup extends StatelessWidget {
+  const _ProfileSectionGroup({required this.title, required this.children});
+
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            'Health safety summary',
-            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16),
+          Padding(
+            padding: const EdgeInsets.only(left: 4, bottom: 9),
+            child: Text(
+              title,
+              style: const TextStyle(
+                color: AppColors.ink,
+                fontWeight: FontWeight.w900,
+                fontSize: 15,
+              ),
+            ),
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _Metric(
-                  label: 'Allergies',
-                  value: '${profile.allergies.length}',
-                ),
-              ),
-              Expanded(
-                child: _Metric(
-                  label: 'Medicines',
-                  value: '${profile.currentMedicines.length}',
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              Expanded(
-                child: _Metric(
-                  label: 'Conditions',
-                  value: '${profile.chronicDiseases.length}',
-                ),
-              ),
-              Expanded(
-                child: _Metric(
-                  label: 'Emergency',
-                  value: profile.hasEmergencyContact ? 'Added' : 'Missing',
-                ),
-              ),
-            ],
+          AppCard(
+            padding: EdgeInsets.zero,
+            child: Column(children: _withDividers(children)),
           ),
         ],
       ),
     );
   }
+
+  static List<Widget> _withDividers(List<Widget> children) {
+    final result = <Widget>[];
+    for (var i = 0; i < children.length; i += 1) {
+      result.add(children[i]);
+      if (i < children.length - 1) {
+        result.add(const Divider(height: 1, indent: 58));
+      }
+    }
+    return result;
+  }
 }
 
-class _Metric extends StatelessWidget {
-  const _Metric({required this.label, required this.value});
+class _ProfileMenuTile extends StatelessWidget {
+  const _ProfileMenuTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.trailingText,
+    this.statusColor,
+    this.showChevron = true,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback? onTap;
+  final String? trailingText;
+  final Color? statusColor;
+  final bool showChevron;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      leading: Icon(icon, color: AppColors.ocean),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+      subtitle: Text(
+        subtitle,
+        style: TextStyle(
+          color: statusColor ?? AppColors.muted,
+          height: 1.35,
+          fontWeight: statusColor == null ? FontWeight.w400 : FontWeight.w700,
+        ),
+      ),
+      trailing: trailingText != null
+          ? Text(
+              trailingText!,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontWeight: FontWeight.w800,
+                fontSize: 12,
+              ),
+            )
+          : showChevron
+          ? const Icon(Icons.chevron_right, color: AppColors.muted)
+          : null,
+      onTap: onTap,
+    );
+  }
+}
+
+class _StatusBadge extends StatelessWidget {
+  const _StatusBadge({required this.label, this.color = AppColors.ocean});
 
   final String label;
-  final String value;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(right: 8),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: AppColors.surfaceTint,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.border),
+        color: color.withValues(alpha: .12),
+        borderRadius: BorderRadius.circular(999),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w900)),
-          const SizedBox(height: 3),
-          Text(
-            label,
-            style: const TextStyle(color: AppColors.muted, fontSize: 12),
-          ),
-        ],
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontWeight: FontWeight.w900,
+          fontSize: 12,
+        ),
       ),
     );
   }
 }
 
-class _ProfileTile extends StatelessWidget {
-  const _ProfileTile({
-    required this.icon,
-    required this.label,
-    required this.status,
-    required this.onTap,
-  });
+class _RoleSelectionSheet extends StatelessWidget {
+  const _RoleSelectionSheet({required this.selectedRole});
 
-  final IconData icon;
-  final String label;
-  final String status;
-  final VoidCallback onTap;
+  final UserRole selectedRole;
 
   @override
   Widget build(BuildContext context) {
-    final mutedStatus = status.isEmpty;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: AppCard(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        onTap: onTap,
-        child: Row(
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Icon(icon, color: AppColors.ink),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(fontWeight: FontWeight.w800),
-              ),
+            const Text(
+              'How will you mainly use Mediverse AI?',
+              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 19),
             ),
-            if (!mutedStatus) ...[
-              Text(
-                status,
-                style: TextStyle(
-                  color: status == 'Added' || status == 'Consent saved'
-                      ? AppColors.emerald
-                      : AppColors.muted,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 12,
-                ),
-              ),
-              const SizedBox(width: 6),
-            ],
-            const Icon(Icons.chevron_right, color: AppColors.muted),
+            const SizedBox(height: 8),
+            const Text(
+              'You can change this later. Professional verification is reviewed separately.',
+              style: TextStyle(color: AppColors.muted, height: 1.4),
+            ),
+            const SizedBox(height: 12),
+            _RoleOption(
+              value: UserRole.patient,
+              selectedRole: selectedRole,
+              title: 'Patient or caregiver',
+              description:
+                  'Check medicine information, manage health details, and keep track of medicines.',
+            ),
+            _RoleOption(
+              value: UserRole.student,
+              selectedRole: selectedRole,
+              title: 'Medical or pharmacy student',
+              description:
+                  'Study medicines, interactions, precautions, and clinical concepts.',
+            ),
+            _RoleOption(
+              value: UserRole.healthcareProfessional,
+              selectedRole: selectedRole,
+              title: 'Healthcare professional',
+              description:
+                  'Access clinical reference tools and manage professional information.',
+            ),
           ],
         ),
       ),
     );
   }
 }
+
+class _RoleOption extends StatelessWidget {
+  const _RoleOption({
+    required this.value,
+    required this.selectedRole,
+    required this.title,
+    required this.description,
+  });
+
+  final UserRole value;
+  final UserRole selectedRole;
+  final String title;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    final selected = value == selectedRole;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(
+        selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+        color: selected ? AppColors.ocean : AppColors.muted,
+      ),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w900)),
+      subtitle: Text(
+        description,
+        style: const TextStyle(color: AppColors.muted, height: 1.35),
+      ),
+      onTap: () => Navigator.pop(context, value),
+    );
+  }
+}
+
+String _roleLabel(UserRole role) {
+  switch (role) {
+    case UserRole.student:
+      return 'Student';
+    case UserRole.healthcareProfessional:
+      return 'Healthcare professional';
+    case UserRole.patient:
+      return 'Patient';
+  }
+}
+
+bool _isProfessional(UserRole role) => role == UserRole.healthcareProfessional;

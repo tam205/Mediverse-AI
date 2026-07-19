@@ -29,6 +29,7 @@ class MediverseTextField extends StatelessWidget {
     this.initialValue,
     this.controller,
     this.keyboardType,
+    this.textCapitalization = TextCapitalization.none,
     this.textInputAction,
     this.onChanged,
     this.onSubmitted,
@@ -45,6 +46,7 @@ class MediverseTextField extends StatelessWidget {
   final String? initialValue;
   final TextEditingController? controller;
   final TextInputType? keyboardType;
+  final TextCapitalization textCapitalization;
   final TextInputAction? textInputAction;
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
@@ -58,6 +60,7 @@ class MediverseTextField extends StatelessWidget {
       initialValue: initialValue,
       obscureText: obscure,
       keyboardType: keyboardType,
+      textCapitalization: textCapitalization,
       textInputAction: textInputAction,
       onChanged: onChanged,
       onFieldSubmitted: onSubmitted,

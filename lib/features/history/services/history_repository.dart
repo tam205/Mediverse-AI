@@ -1,4 +1,5 @@
 import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../auth/services/auth_service.dart';
@@ -16,8 +17,13 @@ class HistoryRepository {
       return HistoryRecord.demo;
     }
 
-    final path = 'users/${AuthService.currentUserId}/history';
-    debugPrint('Loading history for ${AuthService.currentUserId}');
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('User is not signed in.');
+    }
+
+    final path = 'users/${user.uid}/history';
+    debugPrint('Loading history for ${user.uid}');
     debugPrint('Database path: $path');
 
     try {
@@ -31,18 +37,24 @@ class HistoryRepository {
       debugPrint('History exists: ${snapshot.exists}');
       debugPrint('History value: ${snapshot.value}');
 
-      if (!snapshot.exists || snapshot.value is! Map) return const [];
-      final data = Map<String, dynamic>.from(snapshot.value as Map);
-      final records = data.entries
-          .where((entry) => entry.value is Map)
-          .map(
-            (entry) => HistoryRecord.fromMap(
-              entry.key,
-              Map<String, dynamic>.from(entry.value as Map),
-            ),
-          )
-          .toList();
-      return records.reversed.toList();
+      if (!snapshot.exists || snapshot.value == null) return const [];
+      final raw = snapshot.value;
+      if (raw is! Map) {
+        throw const FormatException('History data has an invalid format.');
+      }
+
+      final records = <HistoryRecord>[];
+      for (final entry in raw.entries) {
+        if (entry.value is! Map) continue;
+        records.add(
+          HistoryRecord.fromMap(
+            entry.key.toString(),
+            Map<String, dynamic>.from(entry.value as Map),
+          ),
+        );
+      }
+      records.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+      return records;
     } catch (error, stackTrace) {
       debugPrint('getHistory error: $error');
       debugPrintStack(stackTrace: stackTrace);
@@ -60,13 +72,16 @@ class HistoryRepository {
       return;
     }
 
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('User is not signed in.');
+    }
+
     final checkedMedicines =
         medicines?.where((value) => value.trim().isNotEmpty).toList() ??
         result.subtitle.split('+').map((value) => value.trim()).toList();
     try {
-      final ref = _db
-          .child('users/${AuthService.currentUserId}/history')
-          .push();
+      final ref = _db.child('users/${user.uid}/history').push();
       await ref
           .set({
             'title': result.subtitle,
@@ -75,10 +90,11 @@ class HistoryRepository {
             'drugB': checkedMedicines.length > 1 ? checkedMedicines[1] : '',
             'status': result.risk,
             'result': result.risk.toLowerCase(),
-            'severity': result.risk.toLowerCase(),
+            'severity': result.severity,
             'riskLevel': result.risk.toLowerCase(),
             'summary': result.details,
             'message': result.details,
+            'evidenceSource': result.evidenceSource,
             'profileIncluded': profileIncluded,
             'profileNotes': result.profileNotes,
             'type': 'interaction',

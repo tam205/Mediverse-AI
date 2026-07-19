@@ -8,6 +8,7 @@ import '../../shared/widgets/buttons.dart';
 import '../../shared/widgets/form_fields.dart';
 import '../drug_checker/result_screen.dart';
 import '../drug_checker/services/interaction_engine.dart';
+import '../drug_checker/services/medicine_repository.dart';
 import 'models/prescription_scan.dart';
 import 'services/prescription_scan_repository.dart';
 
@@ -22,6 +23,7 @@ class ReviewDetectedMedicinesScreen extends StatefulWidget {
 class _ReviewDetectedMedicinesScreenState
     extends State<ReviewDetectedMedicinesScreen> {
   final _repository = const PrescriptionScanRepository();
+  final _medicineRepository = const MedicineRepository();
   final _engine = const InteractionEngine();
   final _controllers = PrescriptionScan.sampleMedicines
       .map((medicine) => TextEditingController(text: medicine))
@@ -68,12 +70,30 @@ class _ReviewDetectedMedicinesScreenState
 
   Future<void> _checkInteractions() async {
     setState(() => _checking = true);
-    final result = await _engine.check(
-      _detectedMedicines.map(_medicineNameOnly).toList(),
-    );
-    if (!mounted) return;
-    setState(() => _checking = false);
-    context.pushScreen(ResultScreen(result: result));
+    try {
+      final medicines = await Future.wait(
+        _detectedMedicines
+            .map(_medicineNameOnly)
+            .map(_medicineRepository.getMedicine),
+      );
+      final approvedMedicines = medicines
+          .where((medicine) => medicine.approved)
+          .toList();
+      final result = await _engine.check(approvedMedicines);
+      if (!mounted) return;
+      context.pushScreen(ResultScreen(result: result));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'We could not check those medicines. Please try again.',
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
   }
 
   void _removeMedicine(int index) {

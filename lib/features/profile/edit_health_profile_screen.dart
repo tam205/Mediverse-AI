@@ -5,6 +5,7 @@ import '../../shared/widgets/app_card.dart';
 import '../../shared/widgets/app_chrome.dart';
 import '../../shared/widgets/buttons.dart';
 import '../../shared/widgets/form_fields.dart';
+import '../drug_checker/models/medicine.dart';
 import 'models/health_profile.dart';
 import 'services/health_profile_repository.dart';
 
@@ -53,11 +54,12 @@ class _EditHealthProfileScreenState extends State<EditHealthProfileScreen> {
       _allergies = profile.medicineAllergies
           .map(
             (substance) => Allergy(
+              id: _newAllergyId(),
               substance: substance,
               reaction: profile.allergyReaction,
-              severity: profile.allergySeverity.isEmpty
-                  ? 'Unknown'
-                  : profile.allergySeverity,
+              severity: AllergySeverity.fromStoredValue(
+                profile.allergySeverity,
+              ),
             ),
           )
           .toList();
@@ -96,11 +98,23 @@ class _EditHealthProfileScreenState extends State<EditHealthProfileScreen> {
         allergyEntries: _allergies,
         medicineAllergies: allergySubstances,
         foodAllergies: widget.initialProfile.foodAllergies,
-        currentMedicines: _currentMedicines,
         hasDiabetes: _hasDiabetes,
         hasHypertension: _hasHypertension,
         hasAsthma: _hasAsthma,
         otherChronicDiseases: _chronicDiseases,
+        allergiesReviewed: true,
+        currentMedicineEntries: _currentMedicines
+            .map(
+              (name) => CurrentMedicine(
+                id: _newMedicineId(),
+                name: name,
+                normalizedName: Medicine.normalizeId(name),
+              ),
+            )
+            .toList(),
+        currentMedicines: _currentMedicines,
+        medicinesReviewed: true,
+        conditionsReviewed: true,
         dataConsent: _dataConsent,
         lastUpdated: DateTime.now(),
       );
@@ -425,7 +439,9 @@ class _AllergyEditor extends StatelessWidget {
               child: ListTile(
                 leading: const Icon(Icons.warning_amber_outlined),
                 title: Text(allergy.substance),
-                subtitle: Text('${allergy.reaction} • ${allergy.severity}'),
+                subtitle: Text(
+                  '${allergy.reaction} • ${allergy.severity.label}',
+                ),
                 onTap: () => _editAllergy(context, entry.key),
                 trailing: IconButton(
                   tooltip: 'Remove allergy',
@@ -453,7 +469,7 @@ class _AddAllergyDialogState extends State<AddAllergyDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _substanceController;
   late final TextEditingController _reactionController;
-  late String _severity;
+  late AllergySeverity _severity;
 
   @override
   void initState() {
@@ -463,7 +479,7 @@ class _AddAllergyDialogState extends State<AddAllergyDialog> {
       text: allergy?.substance ?? '',
     );
     _reactionController = TextEditingController(text: allergy?.reaction ?? '');
-    _severity = allergy?.severity ?? 'Moderate';
+    _severity = allergy?.severity ?? AllergySeverity.moderate;
   }
 
   @override
@@ -478,6 +494,7 @@ class _AddAllergyDialogState extends State<AddAllergyDialog> {
     Navigator.pop(
       context,
       Allergy(
+        id: widget.initialAllergy?.id ?? _newAllergyId(),
         substance: _substanceController.text.trim(),
         reaction: _reactionController.text.trim(),
         severity: _severity,
@@ -525,14 +542,26 @@ class _AddAllergyDialogState extends State<AddAllergyDialog> {
                 },
               ),
               const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
+              DropdownButtonFormField<AllergySeverity>(
                 initialValue: _severity,
                 decoration: const InputDecoration(labelText: 'Severity'),
                 items: const [
-                  DropdownMenuItem(value: 'Mild', child: Text('Mild')),
-                  DropdownMenuItem(value: 'Moderate', child: Text('Moderate')),
-                  DropdownMenuItem(value: 'Severe', child: Text('Severe')),
-                  DropdownMenuItem(value: 'Unknown', child: Text('Not sure')),
+                  DropdownMenuItem(
+                    value: AllergySeverity.mild,
+                    child: Text('Mild'),
+                  ),
+                  DropdownMenuItem(
+                    value: AllergySeverity.moderate,
+                    child: Text('Moderate'),
+                  ),
+                  DropdownMenuItem(
+                    value: AllergySeverity.severe,
+                    child: Text('Severe'),
+                  ),
+                  DropdownMenuItem(
+                    value: AllergySeverity.unknown,
+                    child: Text('Not sure'),
+                  ),
                 ],
                 onChanged: (value) {
                   if (value != null) setState(() => _severity = value);
@@ -616,3 +645,7 @@ class _StringListEditor extends StatelessWidget {
     );
   }
 }
+
+String _newAllergyId() => DateTime.now().microsecondsSinceEpoch.toString();
+
+String _newMedicineId() => DateTime.now().microsecondsSinceEpoch.toString();

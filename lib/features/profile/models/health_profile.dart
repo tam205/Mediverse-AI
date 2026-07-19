@@ -1,26 +1,156 @@
 import 'package:firebase_database/firebase_database.dart';
 
+import '../../drug_checker/models/medicine.dart';
+
+enum UserRole {
+  patient,
+  student,
+  healthcareProfessional;
+
+  static UserRole fromStoredValue(Object? value) {
+    switch (value?.toString()) {
+      case 'student':
+        return UserRole.student;
+      case 'professional':
+      case 'healthcareProfessional':
+        return UserRole.healthcareProfessional;
+      default:
+        return UserRole.patient;
+    }
+  }
+}
+
+enum AllergySeverity {
+  mild,
+  moderate,
+  severe,
+  unknown;
+
+  String get label {
+    switch (this) {
+      case AllergySeverity.mild:
+        return 'Mild';
+      case AllergySeverity.moderate:
+        return 'Moderate';
+      case AllergySeverity.severe:
+        return 'Severe';
+      case AllergySeverity.unknown:
+        return 'Not sure';
+    }
+  }
+
+  static AllergySeverity fromStoredValue(Object? value) {
+    switch (value?.toString().toLowerCase()) {
+      case 'mild':
+        return AllergySeverity.mild;
+      case 'moderate':
+        return AllergySeverity.moderate;
+      case 'severe':
+        return AllergySeverity.severe;
+      default:
+        return AllergySeverity.unknown;
+    }
+  }
+}
+
 class Allergy {
   const Allergy({
+    required this.id,
     required this.substance,
     required this.reaction,
     required this.severity,
   });
 
+  final String id;
   final String substance;
   final String reaction;
-  final String severity;
+  final AllergySeverity severity;
 
   factory Allergy.fromMap(Map<String, dynamic> map) {
     return Allergy(
+      id: map['id']?.toString() ?? '',
       substance: map['substance']?.toString() ?? '',
       reaction: map['reaction']?.toString() ?? '',
-      severity: map['severity']?.toString() ?? 'Unknown',
+      severity: AllergySeverity.fromStoredValue(map['severity']),
     );
   }
 
   Map<String, dynamic> toMap() {
-    return {'substance': substance, 'reaction': reaction, 'severity': severity};
+    return {
+      'id': id,
+      'substance': substance,
+      'reaction': reaction,
+      'severity': severity.name,
+    };
+  }
+}
+
+class CurrentMedicine {
+  const CurrentMedicine({
+    required this.id,
+    required this.name,
+    this.normalizedName,
+    this.strength,
+    this.dose,
+    this.frequency,
+    this.reason,
+    this.startDate,
+  });
+
+  final String id;
+  final String name;
+  final String? normalizedName;
+  final String? strength;
+  final String? dose;
+  final String? frequency;
+  final String? reason;
+  final DateTime? startDate;
+
+  String get normalized {
+    final stored = normalizedName?.trim() ?? '';
+    if (stored.isNotEmpty) return stored;
+    return Medicine.normalizeId(name);
+  }
+
+  String get detailsLine {
+    return [
+      strength,
+      dose,
+      frequency,
+    ].where((value) => value != null && value.trim().isNotEmpty).join(' • ');
+  }
+
+  factory CurrentMedicine.fromMap(Map<String, dynamic> map) {
+    final name = map['name']?.toString() ?? '';
+    return CurrentMedicine(
+      id: map['id']?.toString() ?? '',
+      name: name,
+      normalizedName:
+          map['normalizedName']?.toString() ?? Medicine.normalizeId(name),
+      strength: _optionalString(map['strength']),
+      dose: _optionalString(map['dose']),
+      frequency: _optionalString(map['frequency']),
+      reason: _optionalString(map['reason']),
+      startDate: DateTime.tryParse(map['startDate']?.toString() ?? ''),
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'normalizedName': normalized,
+      if (strength?.trim().isNotEmpty ?? false) 'strength': strength!.trim(),
+      if (dose?.trim().isNotEmpty ?? false) 'dose': dose!.trim(),
+      if (frequency?.trim().isNotEmpty ?? false) 'frequency': frequency!.trim(),
+      if (reason?.trim().isNotEmpty ?? false) 'reason': reason!.trim(),
+      if (startDate != null) 'startDate': startDate!.toIso8601String(),
+    };
+  }
+
+  static String? _optionalString(Object? value) {
+    final text = value?.toString().trim() ?? '';
+    return text.isEmpty ? null : text;
   }
 }
 
@@ -33,6 +163,7 @@ class HealthProfile {
     required this.gender,
     required this.country,
     required this.language,
+    required this.primaryRole,
     required this.age,
     required this.weightKg,
     required this.heightCm,
@@ -47,11 +178,15 @@ class HealthProfile {
     required this.hasAsthma,
     required this.otherChronicDiseases,
     required this.pregnancyBreastfeeding,
+    required this.currentMedicineEntries,
     required this.currentMedicines,
     required this.emergencyName,
     required this.emergencyRelationship,
     required this.emergencyCountryCode,
     required this.emergencyPhone,
+    required this.allergiesReviewed,
+    required this.medicinesReviewed,
+    required this.conditionsReviewed,
     required this.dataConsent,
     required this.lastUpdated,
   });
@@ -63,6 +198,7 @@ class HealthProfile {
   final String gender;
   final String country;
   final String language;
+  final UserRole primaryRole;
   final int age;
   final double weightKg;
   final double heightCm;
@@ -77,11 +213,15 @@ class HealthProfile {
   final bool hasAsthma;
   final List<String> otherChronicDiseases;
   final String pregnancyBreastfeeding;
+  final List<CurrentMedicine> currentMedicineEntries;
   final List<String> currentMedicines;
   final String emergencyName;
   final String emergencyRelationship;
   final String emergencyCountryCode;
   final String emergencyPhone;
+  final bool allergiesReviewed;
+  final bool medicinesReviewed;
+  final bool conditionsReviewed;
   final bool dataConsent;
   final DateTime lastUpdated;
 
@@ -113,38 +253,31 @@ class HealthProfile {
   bool get hasEmergencyContact => emergencyContact != 'Not added';
 
   int get completionPercent {
-    final values = [
-      name,
-      email,
-      phone,
-      dateOfBirth,
-      gender,
-      country,
-      language,
-      age > 0 ? '$age' : '',
-      weightKg > 0 ? '$weightKg' : '',
-      heightCm > 0 ? '$heightCm' : '',
-      bloodGroup,
-      allergies.isNotEmpty ? 'allergies' : '',
-      currentMedicines.isNotEmpty ? 'medicines' : '',
-      emergencyName,
-      emergencyPhone,
-      dataConsent ? 'consent' : '',
-    ];
-    final complete = values.where((value) => value.trim().isNotEmpty).length;
-    return ((complete / values.length) * 100).round();
+    var completed = 0;
+    const total = 8;
+
+    if (name.trim().isNotEmpty) completed++;
+    if (age > 0 || dateOfBirth.trim().isNotEmpty) completed++;
+    if (country.trim().isNotEmpty) completed++;
+    completed++;
+    if (allergiesReviewed) completed++;
+    if (medicinesReviewed) completed++;
+    if (conditionsReviewed) completed++;
+    if (dataConsent) completed++;
+
+    return ((completed / total) * 100).round();
   }
 
   String get missingGuidance {
     final missing = <String>[];
-    if (allergies.isEmpty) {
+    if (!allergiesReviewed) {
       missing.add('allergies');
     }
-    if (currentMedicines.isEmpty) {
+    if (!medicinesReviewed) {
       missing.add('current medicines');
     }
-    if (!hasEmergencyContact) {
-      missing.add('emergency contact');
+    if (!conditionsReviewed) {
+      missing.add('health conditions');
     }
     if (missing.isEmpty) {
       return 'Your safety profile is ready for smarter checks.';
@@ -179,20 +312,23 @@ class HealthProfile {
       gender: 'Not specified',
       country: 'DRC',
       language: 'English / French',
+      primaryRole: UserRole.patient,
       age: 34,
       weightKg: 72,
       heightCm: 170,
       bloodGroup: 'O+',
       allergyEntries: const [
         Allergy(
+          id: 'demo-penicillin',
           substance: 'Penicillin',
           reaction: 'Rash and swelling',
-          severity: 'Moderate',
+          severity: AllergySeverity.moderate,
         ),
         Allergy(
+          id: 'demo-peanuts',
           substance: 'Peanuts',
           reaction: 'Swelling',
-          severity: 'Moderate',
+          severity: AllergySeverity.moderate,
         ),
       ],
       medicineAllergies: ['Penicillin'],
@@ -204,11 +340,38 @@ class HealthProfile {
       hasAsthma: false,
       otherChronicDiseases: const [],
       pregnancyBreastfeeding: 'Not applicable',
+      currentMedicineEntries: const [
+        CurrentMedicine(
+          id: 'demo-amlodipine',
+          name: 'Amlodipine',
+          normalizedName: 'amlodipine',
+          strength: '5 mg',
+          frequency: 'Once daily',
+          reason: 'For hypertension',
+        ),
+        CurrentMedicine(
+          id: 'demo-vitamin-d3',
+          name: 'Vitamin D3',
+          normalizedName: 'vitamin-d3',
+          strength: '1000 IU',
+          frequency: 'Once daily',
+        ),
+        CurrentMedicine(
+          id: 'demo-paracetamol',
+          name: 'Paracetamol',
+          normalizedName: 'paracetamol',
+          strength: '500 mg',
+          frequency: 'When needed',
+        ),
+      ],
       currentMedicines: ['Amlodipine', 'Vitamin D3', 'Paracetamol'],
       emergencyName: 'Mary Doe',
       emergencyRelationship: 'Sister',
       emergencyCountryCode: '+243',
       emergencyPhone: '000 000 000',
+      allergiesReviewed: true,
+      medicinesReviewed: true,
+      conditionsReviewed: true,
       dataConsent: true,
       lastUpdated: DateTime.now(),
     );
@@ -224,6 +387,7 @@ class HealthProfile {
     gender: '',
     country: '',
     language: '',
+    primaryRole: UserRole.patient,
     age: 0,
     weightKg: 0,
     heightCm: 0,
@@ -238,11 +402,15 @@ class HealthProfile {
     hasAsthma: false,
     otherChronicDiseases: const [],
     pregnancyBreastfeeding: 'Not applicable',
+    currentMedicineEntries: const [],
     currentMedicines: const [],
     emergencyName: '',
     emergencyRelationship: '',
     emergencyCountryCode: '',
     emergencyPhone: '',
+    allergiesReviewed: false,
+    medicinesReviewed: false,
+    conditionsReviewed: false,
     dataConsent: false,
     lastUpdated: DateTime.fromMillisecondsSinceEpoch(0),
   );
@@ -250,6 +418,7 @@ class HealthProfile {
   factory HealthProfile.fromMap(Map<String, dynamic> map) {
     final fallback = HealthProfile.demoForUser();
     final allergyEntries = _allergyEntriesFromMap(map);
+    final currentMedicineEntries = _currentMedicineEntriesFromMap(map);
     return HealthProfile(
       name: map['name'] as String? ?? fallback.name,
       email: map['email'] as String? ?? fallback.email,
@@ -258,6 +427,7 @@ class HealthProfile {
       gender: map['gender'] as String? ?? fallback.gender,
       country: map['country'] as String? ?? fallback.country,
       language: map['language'] as String? ?? fallback.language,
+      primaryRole: UserRole.fromStoredValue(map['primaryRole']),
       age: (map['age'] as num?)?.toInt() ?? fallback.age,
       weightKg: (map['weightKg'] as num?)?.toDouble() ?? fallback.weightKg,
       heightCm: (map['heightCm'] as num?)?.toDouble() ?? fallback.heightCm,
@@ -283,9 +453,12 @@ class HealthProfile {
       pregnancyBreastfeeding:
           map['pregnancyBreastfeeding'] as String? ??
           fallback.pregnancyBreastfeeding,
-      currentMedicines: List<String>.from(
-        map['currentMedicines'] as List? ?? fallback.currentMedicines,
-      ),
+      currentMedicineEntries: currentMedicineEntries,
+      currentMedicines: currentMedicineEntries.isNotEmpty
+          ? currentMedicineEntries.map((medicine) => medicine.name).toList()
+          : List<String>.from(
+              map['currentMedicines'] as List? ?? fallback.currentMedicines,
+            ),
       emergencyName: map['emergencyName'] as String? ?? fallback.emergencyName,
       emergencyRelationship:
           map['emergencyRelationship'] as String? ??
@@ -295,6 +468,18 @@ class HealthProfile {
           fallback.emergencyCountryCode,
       emergencyPhone:
           map['emergencyPhone'] as String? ?? fallback.emergencyPhone,
+      allergiesReviewed:
+          map['allergiesReviewed'] as bool? ?? allergyEntries.isNotEmpty,
+      medicinesReviewed:
+          map['medicinesReviewed'] as bool? ??
+          (currentMedicineEntries.isNotEmpty ||
+              ((map['currentMedicines'] as List?)?.isNotEmpty ?? false)),
+      conditionsReviewed:
+          map['conditionsReviewed'] as bool? ??
+          (map['hasDiabetes'] == true ||
+              map['hasHypertension'] == true ||
+              map['hasAsthma'] == true ||
+              (map['chronicDiseases'] as List? ?? const []).isNotEmpty),
       dataConsent: map['dataConsent'] as bool? ?? fallback.dataConsent,
       lastUpdated:
           DateTime.tryParse(map['lastUpdated'] as String? ?? '') ??
@@ -308,6 +493,7 @@ class HealthProfile {
     DateTime? lastUpdated,
     int? age,
     String? country,
+    UserRole? primaryRole,
     String? bloodGroup,
     List<Allergy>? allergyEntries,
     List<String>? medicineAllergies,
@@ -317,7 +503,11 @@ class HealthProfile {
     bool? hasAsthma,
     List<String>? otherChronicDiseases,
     String? pregnancyBreastfeeding,
+    List<CurrentMedicine>? currentMedicineEntries,
     List<String>? currentMedicines,
+    bool? allergiesReviewed,
+    bool? medicinesReviewed,
+    bool? conditionsReviewed,
     bool? dataConsent,
   }) {
     return HealthProfile(
@@ -328,6 +518,7 @@ class HealthProfile {
       gender: gender,
       country: country ?? this.country,
       language: language,
+      primaryRole: primaryRole ?? this.primaryRole,
       age: age ?? this.age,
       weightKg: weightKg,
       heightCm: heightCm,
@@ -343,11 +534,19 @@ class HealthProfile {
       otherChronicDiseases: otherChronicDiseases ?? this.otherChronicDiseases,
       pregnancyBreastfeeding:
           pregnancyBreastfeeding ?? this.pregnancyBreastfeeding,
-      currentMedicines: currentMedicines ?? this.currentMedicines,
+      currentMedicineEntries:
+          currentMedicineEntries ?? this.currentMedicineEntries,
+      currentMedicines:
+          currentMedicines ??
+          currentMedicineEntries?.map((medicine) => medicine.name).toList() ??
+          this.currentMedicines,
       emergencyName: emergencyName,
       emergencyRelationship: emergencyRelationship,
       emergencyCountryCode: emergencyCountryCode,
       emergencyPhone: emergencyPhone,
+      allergiesReviewed: allergiesReviewed ?? this.allergiesReviewed,
+      medicinesReviewed: medicinesReviewed ?? this.medicinesReviewed,
+      conditionsReviewed: conditionsReviewed ?? this.conditionsReviewed,
       dataConsent: dataConsent ?? this.dataConsent,
       lastUpdated: lastUpdated ?? this.lastUpdated,
     );
@@ -364,7 +563,7 @@ class HealthProfile {
         ? allergyEntries.first.reaction
         : allergyReaction;
     final legacySeverity = allergyEntries.isNotEmpty
-        ? allergyEntries.first.severity
+        ? allergyEntries.first.severity.name
         : allergySeverity;
 
     return {
@@ -375,6 +574,7 @@ class HealthProfile {
       'gender': gender,
       'country': country,
       'language': language,
+      'primaryRole': primaryRole.name,
       'age': age,
       'weightKg': weightKg,
       'heightCm': heightCm,
@@ -389,11 +589,19 @@ class HealthProfile {
       'hasAsthma': hasAsthma,
       'chronicDiseases': chronicDiseases,
       'pregnancyBreastfeeding': pregnancyBreastfeeding,
-      'currentMedicines': currentMedicines,
+      'currentMedicineEntries': currentMedicineEntries
+          .map((medicine) => medicine.toMap())
+          .toList(),
+      'currentMedicines': currentMedicineEntries.isNotEmpty
+          ? currentMedicineEntries.map((medicine) => medicine.name).toList()
+          : currentMedicines,
       'emergencyName': emergencyName,
       'emergencyRelationship': emergencyRelationship,
       'emergencyCountryCode': emergencyCountryCode,
       'emergencyPhone': emergencyPhone,
+      'allergiesReviewed': allergiesReviewed,
+      'medicinesReviewed': medicinesReviewed,
+      'conditionsReviewed': conditionsReviewed,
       'dataConsent': dataConsent,
       'updatedAt': ServerValue.timestamp,
       'lastUpdated': lastUpdated.toIso8601String(),
@@ -435,5 +643,30 @@ class HealthProfile {
     return List<String>.from(
       map['chronicDiseases'] as List? ?? const [],
     ).where((condition) => !known.contains(condition.toLowerCase())).toList();
+  }
+
+  static List<CurrentMedicine> _currentMedicineEntriesFromMap(
+    Map<String, dynamic> map,
+  ) {
+    final raw = map['currentMedicineEntries'];
+    if (raw is List) {
+      return raw
+          .whereType<Map>()
+          .map(
+            (item) => CurrentMedicine.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .where((medicine) => medicine.name.trim().isNotEmpty)
+          .toList();
+    }
+    if (raw is Map) {
+      return raw.values
+          .whereType<Map>()
+          .map(
+            (item) => CurrentMedicine.fromMap(Map<String, dynamic>.from(item)),
+          )
+          .where((medicine) => medicine.name.trim().isNotEmpty)
+          .toList();
+    }
+    return const [];
   }
 }

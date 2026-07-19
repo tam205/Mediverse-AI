@@ -7,7 +7,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('Mediverse AI'), findsOneWidget);
-    expect(find.text('Welcome back'), findsOneWidget);
-    expect(find.text('Sign in'), findsOneWidget);
+    expect(find.text('Good to see you again'), findsOneWidget);
+    expect(find.text('Continue'), findsOneWidget);
   });
 }

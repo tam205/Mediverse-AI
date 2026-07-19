@@ -124,6 +124,13 @@ class ResultScreen extends StatelessWidget {
                       body: result.profileNotes,
                     ),
                   ],
+                  if (result.evidenceSource.isNotEmpty) ...[
+                    const SizedBox(height: 16),
+                    _GuidanceBlock(
+                      title: 'Evidence source',
+                      body: result.evidenceSource,
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   _GuidanceBlock(
                     title: 'Why it is risky',

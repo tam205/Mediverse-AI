@@ -1,5 +1,6 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../../firebase_options.dart';
 import '../../../services/user_service.dart';
@@ -61,6 +62,12 @@ class AuthService {
         );
       }
       firebaseReady = true;
+      debugPrint(
+        'Firebase project: ${DefaultFirebaseOptions.currentPlatform.projectId}',
+      );
+      debugPrint(
+        'Realtime Database URL: ${DefaultFirebaseOptions.currentPlatform.databaseURL}',
+      );
     } catch (_) {
       firebaseReady = false;
     }
@@ -72,9 +79,7 @@ class AuthService {
   }) async {
     if (!firebaseReady) {
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      return AuthResult.demo(
-        'Demo sign in active until Firebase is configured.',
-      );
+      return AuthResult.demo('Demo sign in is active.');
     }
 
     try {
@@ -92,12 +97,11 @@ class AuthService {
     required String name,
     required String email,
     required String password,
+    required String languageCode,
   }) async {
     if (!firebaseReady) {
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      return AuthResult.demo(
-        'Demo account created. Add Firebase config to persist users.',
-      );
+      return AuthResult.demo('Demo account created.');
     }
 
     try {
@@ -109,6 +113,8 @@ class AuthService {
           user: credential.user!,
           name: name,
         );
+        await FirebaseAuth.instance.setLanguageCode(languageCode);
+        await credential.user!.sendEmailVerification();
       }
       await credential.user?.reload();
       return AuthResult.success();
@@ -117,20 +123,71 @@ class AuthService {
     }
   }
 
-  static Future<AuthResult> sendPasswordReset(String email) async {
+  static Future<AuthResult> sendPasswordReset({
+    required String email,
+    required String languageCode,
+  }) async {
     if (!firebaseReady) {
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      return AuthResult.demo(
-        'Password reset preview. Firebase email reset will work after configuration.',
+      return AuthResult.demo('Password reset email sent if an account exists.');
+    }
+
+    try {
+      final auth = FirebaseAuth.instance;
+      await auth.setLanguageCode(languageCode);
+      await auth.sendPasswordResetEmail(email: email.trim());
+      return const AuthResult._(
+        ok: true,
+        message: 'Password reset email sent if an account exists.',
+        demoMode: false,
+      );
+    } on FirebaseAuthException catch (error) {
+      return AuthResult.failure(_messageFor(error));
+    }
+  }
+
+  static Future<AuthResult> sendEmailVerification() async {
+    if (!firebaseReady) {
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      return const AuthResult._(
+        ok: true,
+        message: 'verification-sent',
+        demoMode: true,
       );
     }
 
     try {
-      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
-      return AuthResult.success();
+      final user = FirebaseAuth.instance.currentUser;
+
+      if (user == null) {
+        return AuthResult.failure('no-user');
+      }
+
+      await user.reload();
+      final refreshedUser = FirebaseAuth.instance.currentUser;
+
+      if (refreshedUser?.emailVerified == true) {
+        return AuthResult.success('already-verified');
+      }
+
+      await refreshedUser?.sendEmailVerification();
+
+      return AuthResult.success('verification-sent');
     } on FirebaseAuthException catch (error) {
-      return AuthResult.failure(_messageFor(error));
+      return AuthResult.failure(error.code);
+    } catch (_) {
+      return AuthResult.failure('unknown-error');
     }
+  }
+
+  static Future<bool> isCurrentUserEmailVerified() async {
+    if (!firebaseReady) return true;
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return false;
+
+    await user.reload();
+    return FirebaseAuth.instance.currentUser?.emailVerified == true;
   }
 
   static Future<void> signOut() async {
@@ -164,8 +221,8 @@ class AuthResult {
   final String message;
   final bool demoMode;
 
-  factory AuthResult.success() {
-    return const AuthResult._(ok: true, message: 'Success', demoMode: false);
+  factory AuthResult.success([String message = 'Success']) {
+    return AuthResult._(ok: true, message: message, demoMode: false);
   }
 
   factory AuthResult.demo(String message) {

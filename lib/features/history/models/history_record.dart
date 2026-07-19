@@ -10,6 +10,7 @@ class HistoryRecord {
     required this.type,
     required this.color,
     required this.icon,
+    required this.createdAt,
   });
 
   final String id;
@@ -18,8 +19,9 @@ class HistoryRecord {
   final String type;
   final Color color;
   final IconData icon;
+  final DateTime createdAt;
 
-  static const demo = [
+  static final demo = [
     HistoryRecord(
       id: '1',
       title: 'Paracetamol + Ibuprofen',
@@ -27,6 +29,7 @@ class HistoryRecord {
       type: 'interaction',
       color: AppColors.emerald,
       icon: Icons.check_circle_outline,
+      createdAt: DateTime(2024),
     ),
     HistoryRecord(
       id: '2',
@@ -35,6 +38,7 @@ class HistoryRecord {
       type: 'interaction',
       color: AppColors.amber,
       icon: Icons.warning_amber_rounded,
+      createdAt: DateTime(2024),
     ),
     HistoryRecord(
       id: '3',
@@ -43,6 +47,7 @@ class HistoryRecord {
       type: 'interaction',
       color: AppColors.coral,
       icon: Icons.report_problem_outlined,
+      createdAt: DateTime(2024),
     ),
     HistoryRecord(
       id: '4',
@@ -51,6 +56,7 @@ class HistoryRecord {
       type: 'scan',
       color: AppColors.ocean,
       icon: Icons.document_scanner_outlined,
+      createdAt: DateTime(2024),
     ),
     HistoryRecord(
       id: '5',
@@ -59,6 +65,7 @@ class HistoryRecord {
       type: 'chat',
       color: AppColors.sky,
       icon: Icons.chat_bubble_outline,
+      createdAt: DateTime(2024),
     ),
   ];
 
@@ -106,7 +113,21 @@ class HistoryRecord {
       type: type,
       color: color,
       icon: icon,
+      createdAt: _createdAtFromMap(map),
     );
+  }
+
+  static DateTime _createdAtFromMap(Map<String, dynamic> map) {
+    final value = map['createdAt'];
+    if (value is num) {
+      return DateTime.fromMillisecondsSinceEpoch(value.toInt());
+    }
+    if (value is String) {
+      final asInt = int.tryParse(value);
+      if (asInt != null) return DateTime.fromMillisecondsSinceEpoch(asInt);
+      return DateTime.tryParse(value) ?? DateTime.fromMillisecondsSinceEpoch(0);
+    }
+    return DateTime.fromMillisecondsSinceEpoch(0);
   }
 
   static String _displayStatus(String value) {

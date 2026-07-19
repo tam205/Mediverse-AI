@@ -1,6 +1,8 @@
 import 'package:firebase_database/firebase_database.dart';
 import 'package:mediverse_ai/features/auth/services/auth_service.dart';
 import 'package:mediverse_ai/features/drug_checker/interaction_result.dart';
+import 'package:mediverse_ai/features/drug_checker/models/interaction_rule.dart';
+import 'package:mediverse_ai/features/drug_checker/models/medicine.dart';
 import 'package:mediverse_ai/features/profile/models/health_profile.dart';
 
 class InteractionEngine {
@@ -9,31 +11,30 @@ class InteractionEngine {
   DatabaseReference get _db => FirebaseDatabase.instance.ref();
 
   Future<InteractionResultCopy> check(
-    List<String> medicines, {
+    List<Medicine> medicines, {
     HealthProfile? profile,
   }) async {
     await Future<void>.delayed(const Duration(milliseconds: 250));
-    final normalized = medicines
-        .map(_normalizeMedicine)
+    final selectedIds = medicines
+        .map((medicine) => medicine.id)
         .where((medicine) => medicine.isNotEmpty)
         .toSet();
     final savedCurrentMedicines = profile == null
         ? <String>{}
-        : profile.currentMedicines
-              .map(_normalizeMedicine)
-              .where((medicine) => medicine.isNotEmpty)
-              .toSet();
-    final medicinesForRisk = {...normalized, ...savedCurrentMedicines};
-    final title = _titleFor(normalized);
+        : _profileMedicineIds(
+            profile,
+          ).where((medicine) => medicine.isNotEmpty).toSet();
+    final medicinesForRisk = {...selectedIds, ...savedCurrentMedicines};
+    final title = _titleForMedicines(medicines);
     final profileNotes = _profileNotes(
-      normalized,
+      selectedIds,
       profile,
       savedCurrentMedicines: savedCurrentMedicines,
     );
 
     final allergy = _matchingAllergy(medicinesForRisk, profile);
     if (allergy != null) {
-      final severe = allergy.severity.toLowerCase() == 'severe';
+      final severe = allergy.severity == AllergySeverity.severe;
       return InteractionResultCopy.fromStatus(
         severe ? InteractionStatus.danger : InteractionStatus.caution,
       ).copyWith(
@@ -112,7 +113,10 @@ class InteractionEngine {
 
     return InteractionResultCopy.fromStatus(InteractionStatus.safe).copyWith(
       subtitle: title,
-      details: 'No known interaction was found for ${_titleFor(normalized)}.',
+      body:
+          'No known interaction was found in the current reviewed database. This does not guarantee that the combination is safe for every person.',
+      details:
+          'No known interaction was found in the current reviewed database. This does not guarantee that the combination is safe for every person.',
       profileNotes: profileNotes,
     );
   }
@@ -120,17 +124,22 @@ class InteractionEngine {
   Future<InteractionResultCopy?> _checkRealtimeDatabase(
     Set<String> medicines,
   ) async {
-    if (!AuthService.firebaseReady || medicines.length < 2) return null;
+    if (medicines.length < 2) return null;
+    if (!AuthService.firebaseReady) return _checkDemoRules(medicines);
 
     final list = medicines.toList();
     InteractionResultCopy? strongest;
     for (var i = 0; i < list.length; i++) {
       for (var j = i + 1; j < list.length; j++) {
         final key = _interactionKey(list[i], list[j]);
-        final snapshot = await _db.child('interactions/$key').get();
+        final snapshot = await _loadRuleSnapshot(key);
         if (!snapshot.exists || snapshot.value is! Map) continue;
-        final data = Map<String, dynamic>.from(snapshot.value as Map);
-        final result = _copyFromDatabase(data, list[i], list[j]);
+        final rule = InteractionRule.fromMap(
+          key,
+          Map<String, dynamic>.from(snapshot.value as Map),
+        );
+        if (!rule.approved) continue;
+        final result = _copyFromRule(rule);
         if (strongest == null || _rank(result.risk) > _rank(strongest.risk)) {
           strongest = result;
         }
@@ -139,28 +148,59 @@ class InteractionEngine {
     return strongest;
   }
 
-  InteractionResultCopy _copyFromDatabase(
-    Map<String, dynamic> data,
-    String drugA,
-    String drugB,
-  ) {
-    final severity = (data['severity'] as String? ?? 'unknown').toLowerCase();
+  InteractionResultCopy? _checkDemoRules(Set<String> medicines) {
+    InteractionResultCopy? strongest;
+    final list = medicines.toList();
+    for (var i = 0; i < list.length; i++) {
+      for (var j = i + 1; j < list.length; j++) {
+        final key = _interactionKey(list[i], list[j]);
+        final matchingRules = InteractionRule.demo.where(
+          (rule) => rule.id == key && rule.approved,
+        );
+        for (final rule in matchingRules) {
+          final result = _copyFromRule(rule);
+          if (strongest == null || _rank(result.risk) > _rank(strongest.risk)) {
+            strongest = result;
+          }
+        }
+      }
+    }
+    return strongest;
+  }
+
+  Future<DataSnapshot> _loadRuleSnapshot(String key) async {
+    final reviewed = await _db.child('interactionRules/$key').get();
+    if (reviewed.exists) return reviewed;
+    return _db.child('interactions/$key').get();
+  }
+
+  InteractionResultCopy _copyFromRule(InteractionRule rule) {
+    final severity = rule.severity.toLowerCase();
     final status = switch (severity) {
-      'high' || 'danger' || 'severe' => InteractionStatus.danger,
-      'medium' || 'moderate' || 'caution' => InteractionStatus.caution,
+      'contraindicated' ||
+      'major' ||
+      'high' ||
+      'danger' ||
+      'severe' => InteractionStatus.danger,
+      'moderate' ||
+      'minor' ||
+      'medium' ||
+      'caution' => InteractionStatus.caution,
       _ => InteractionStatus.safe,
     };
     final base = InteractionResultCopy.fromStatus(status);
-    final message = data['message'] as String? ?? base.details;
-    final recommendation = data['recommendation'] as String? ?? base.userAction;
 
     return base.copyWith(
-      subtitle: '${_displayName(drugA)} + ${_displayName(drugB)}',
-      details: message,
-      whyRisky: message,
-      userAction: recommendation,
+      subtitle:
+          '${_displayName(rule.medicineAId)} + ${_displayName(rule.medicineBId)}',
+      body: rule.explanation,
+      details: rule.explanation,
+      whyRisky: rule.explanation,
+      userAction: rule.recommendedAction,
       professionalAdvice:
-          'Confirm this result with a doctor or pharmacist, especially if symptoms are severe or the medicine is prescribed.',
+          'Confirm this result with a doctor or pharmacist, especially if symptoms are severe or either medicine is prescribed.',
+      severity: rule.severity,
+      evidenceSource: '${rule.evidenceSource} (version ${rule.version})',
     );
   }
 
@@ -171,17 +211,18 @@ class InteractionEngine {
         : profile.allergies
               .map(
                 (substance) => Allergy(
+                  id: 'legacy-${Medicine.normalizeId(substance)}',
                   substance: substance,
                   reaction: profile.allergyReaction,
-                  severity: profile.allergySeverity.isEmpty
-                      ? 'Unknown'
-                      : profile.allergySeverity,
+                  severity: AllergySeverity.fromStoredValue(
+                    profile.allergySeverity,
+                  ),
                 ),
               )
               .toList();
 
     for (final allergy in allergies) {
-      final allergen = _normalizeMedicine(allergy.substance);
+      final allergen = Medicine.normalizeId(allergy.substance);
       if (allergen.isEmpty) continue;
       final matches = medicines.any(
         (medicine) =>
@@ -286,7 +327,9 @@ class InteractionEngine {
       'Conditions: ${profile.chronicDiseases.isEmpty ? 'None recorded' : profile.chronicDiseases.join(', ')}',
     ];
     if (medicines.any(savedCurrentMedicines.contains)) {
-      notes.add('Includes medicines from your saved profile.');
+      notes.add(
+        'Current medicine consideration: ${_profileMedicineNames(profile, savedCurrentMedicines).join(', ')} were included automatically in this safety check.',
+      );
     } else if (savedCurrentMedicines.isNotEmpty) {
       notes.add(
         'Saved current medicines were also considered for interaction risks.',
@@ -297,6 +340,30 @@ class InteractionEngine {
 
   bool _hasAny(Set<String> medicines, Set<String> targets) {
     return targets.any(medicines.contains);
+  }
+
+  Iterable<String> _profileMedicineIds(HealthProfile profile) {
+    if (profile.currentMedicineEntries.isNotEmpty) {
+      return profile.currentMedicineEntries.map(
+        (medicine) => medicine.normalized,
+      );
+    }
+    return profile.currentMedicines.map(Medicine.normalizeId);
+  }
+
+  List<String> _profileMedicineNames(
+    HealthProfile profile,
+    Set<String> includedIds,
+  ) {
+    if (profile.currentMedicineEntries.isNotEmpty) {
+      return profile.currentMedicineEntries
+          .where((medicine) => includedIds.contains(medicine.normalized))
+          .map((medicine) => medicine.name)
+          .toList();
+    }
+    return profile.currentMedicines
+        .where((name) => includedIds.contains(Medicine.normalizeId(name)))
+        .toList();
   }
 
   String _interactionKey(String drugA, String drugB) {
@@ -312,20 +379,9 @@ class InteractionEngine {
     };
   }
 
-  String _titleFor(Set<String> medicines) {
+  String _titleForMedicines(List<Medicine> medicines) {
     if (medicines.isEmpty) return 'No medicines selected';
-    return medicines.map(_displayName).join(' + ');
-  }
-
-  String _normalizeMedicine(String value) {
-    return value
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'\b\d+\s?(mg|ml|g|mcg|iu)\b'), '')
-        .replaceAll(RegExp(r'\s+'), '-')
-        .replaceAll(RegExp(r'[^a-z0-9-]'), '')
-        .replaceAll(RegExp(r'-+'), '-')
-        .replaceAll(RegExp(r'^-|-$'), '');
+    return medicines.map((medicine) => medicine.genericName).join(' + ');
   }
 
   String _displayName(String value) {

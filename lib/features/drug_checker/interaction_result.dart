@@ -18,6 +18,7 @@ class InteractionResultCopy {
     required this.professionalAdvice,
     required this.color,
     this.profileNotes = '',
+    this.evidenceSource = '',
   });
 
   final IconData icon;
@@ -32,28 +33,35 @@ class InteractionResultCopy {
   final String professionalAdvice;
   final Color color;
   final String profileNotes;
+  final String evidenceSource;
 
   InteractionResultCopy copyWith({
+    String? title,
     String? subtitle,
+    String? body,
+    String? risk,
+    String? severity,
     String? details,
     String? whyRisky,
     String? userAction,
     String? professionalAdvice,
     String? profileNotes,
+    String? evidenceSource,
   }) {
     return InteractionResultCopy(
       icon: icon,
-      title: title,
+      title: title ?? this.title,
       subtitle: subtitle ?? this.subtitle,
-      body: body,
-      risk: risk,
-      severity: severity,
+      body: body ?? this.body,
+      risk: risk ?? this.risk,
+      severity: severity ?? this.severity,
       details: details ?? this.details,
       whyRisky: whyRisky ?? this.whyRisky,
       userAction: userAction ?? this.userAction,
       professionalAdvice: professionalAdvice ?? this.professionalAdvice,
       color: color,
       profileNotes: profileNotes ?? this.profileNotes,
+      evidenceSource: evidenceSource ?? this.evidenceSource,
     );
   }
 
@@ -65,16 +73,18 @@ class InteractionResultCopy {
           title: 'No known concern found',
           subtitle: 'Paracetamol + Ibuprofen',
           body:
-              'These medicines do not show a known interaction in the available safety information.',
+              'No known interaction was found in the current reviewed database. This does not guarantee that the combination is safe for every person.',
           risk: 'No known concern found',
           severity: 'None',
-          details: 'No known interaction between Paracetamol and Ibuprofen.',
+          details:
+              'No known interaction was found in the current reviewed database. This does not guarantee that the combination is safe for every person.',
           whyRisky:
-              'No major risk is currently shown for this pair in the demo data.',
+              'The reviewed database may not include every medicine, dose, disease, allergy, pregnancy or breastfeeding concern, or patient-specific risk.',
           userAction:
               'Use medicines only as directed and avoid taking extra doses.',
           professionalAdvice:
               'Ask a doctor or pharmacist if symptoms continue, worsen, or if you have liver, kidney, pregnancy, or breastfeeding concerns.',
+          evidenceSource: 'Current reviewed interaction-rule database',
           color: AppColors.emerald,
         );
       case InteractionStatus.caution:
@@ -93,6 +103,7 @@ class InteractionResultCopy {
               'Do not stop prescribed medicine. Monitor symptoms and avoid repeated use without advice.',
           professionalAdvice:
               'Speak with a pharmacist or doctor before using this combination, especially with hypertension, kidney disease, pregnancy, or older age.',
+          evidenceSource: 'Current reviewed interaction-rule database',
           color: AppColors.amber,
         );
       case InteractionStatus.danger:
@@ -111,6 +122,7 @@ class InteractionResultCopy {
               'Do not take this combination unless a doctor specifically told you to. Watch for bleeding, black stool, vomiting blood, or severe weakness.',
           professionalAdvice:
               'Contact a doctor or pharmacist immediately. If there are emergency symptoms, seek urgent care.',
+          evidenceSource: 'Current reviewed interaction-rule database',
           color: AppColors.coral,
         );
     }

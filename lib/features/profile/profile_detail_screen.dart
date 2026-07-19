@@ -53,9 +53,15 @@ class ProfileDetailScreen extends StatelessWidget {
                           style: const TextStyle(color: AppColors.muted),
                         ),
                       ),
-                      Text(
-                        item.$2,
-                        style: const TextStyle(fontWeight: FontWeight.w900),
+                      Flexible(
+                        child: Text(
+                          item.$2,
+                          textAlign: TextAlign.right,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w900,
+                            height: 1.3,
+                          ),
+                        ),
                       ),
                     ],
                   ),

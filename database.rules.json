@@ -13,6 +13,10 @@
     "interactions": {
       ".read": "auth != null",
       ".write": false
+    },
+    "interactionRules": {
+      ".read": "auth != null",
+      ".write": false
     }
   }
 }

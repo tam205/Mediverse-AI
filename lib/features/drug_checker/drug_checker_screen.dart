@@ -31,22 +31,11 @@ class _DrugCheckerScreenState extends State<DrugCheckerScreen> {
   final _historyRepository = const HistoryRepository();
   final _engine = const InteractionEngine();
   final _searchController = TextEditingController();
-  final _drugControllers = [TextEditingController(), TextEditingController()];
+  final List<Medicine> _selectedMedicines = [];
   late Future<List<Medicine>> _suggestionsFuture;
   late Future<HealthProfile> _profileFuture;
   bool _checking = false;
   bool _profileUnavailable = false;
-
-  List<String> get _selectedMedicines {
-    final medicines = <String, String>{};
-    for (final controller in _drugControllers) {
-      final medicine = controller.text.trim();
-      if (medicine.isNotEmpty) {
-        medicines.putIfAbsent(medicine.toLowerCase(), () => medicine);
-      }
-    }
-    return medicines.values.toList();
-  }
 
   @override
   void initState() {
@@ -58,9 +47,6 @@ class _DrugCheckerScreenState extends State<DrugCheckerScreen> {
   @override
   void dispose() {
     _searchController.dispose();
-    for (final controller in _drugControllers) {
-      controller.dispose();
-    }
     super.dispose();
   }
 
@@ -68,40 +54,33 @@ class _DrugCheckerScreenState extends State<DrugCheckerScreen> {
     setState(() => _suggestionsFuture = _repository.searchMedicines(value));
   }
 
-  void _addMedicine(String name) {
-    final normalized = name.trim().toLowerCase();
-    if (normalized.isEmpty) return;
-
-    final exists = _drugControllers.any(
-      (controller) => controller.text.trim().toLowerCase() == normalized,
-    );
+  void _addMedicine(Medicine medicine) {
+    final exists = _selectedMedicines.any((item) => item.id == medicine.id);
     if (exists) return;
 
-    final emptyIndex = _drugControllers.indexWhere(
-      (controller) => controller.text.trim().isEmpty,
-    );
     setState(() {
-      if (emptyIndex == -1) {
-        _drugControllers.add(TextEditingController(text: name.trim()));
-      } else {
-        _drugControllers[emptyIndex].text = name.trim();
-      }
+      _selectedMedicines.add(medicine);
+      _searchController.clear();
+      _suggestionsFuture = _repository.searchMedicines('');
     });
   }
 
-  void _removeMedicine(int index) {
-    if (_drugControllers.length <= 2) {
-      setState(() => _drugControllers[index].clear());
-      return;
-    }
-    final controller = _drugControllers.removeAt(index);
-    controller.dispose();
-    setState(() {});
+  void _removeMedicine(String id) {
+    setState(
+      () => _selectedMedicines.removeWhere((medicine) => medicine.id == id),
+    );
   }
 
-  void _addCurrentMedicines(HealthProfile profile) {
-    for (final medicine in profile.currentMedicines) {
-      _addMedicine(medicine);
+  Future<void> _addCurrentMedicines(HealthProfile profile) async {
+    final medicineNames = profile.currentMedicineEntries.isNotEmpty
+        ? profile.currentMedicineEntries.map(
+            (medicine) => medicine.normalizedName ?? medicine.name,
+          )
+        : profile.currentMedicines;
+
+    for (final medicine in medicineNames) {
+      final resolved = await _repository.getMedicine(medicine);
+      if (resolved.approved) _addMedicine(resolved);
     }
   }
 
@@ -111,8 +90,8 @@ class _DrugCheckerScreenState extends State<DrugCheckerScreen> {
         ? const <String>[]
         : profile.currentMedicines;
     final combinedMedicineCount = {
-      ...medicines.map((medicine) => medicine.toLowerCase()),
-      ...savedMedicines.map((medicine) => medicine.toLowerCase()),
+      ...medicines.map((medicine) => medicine.id),
+      ...savedMedicines.map(Medicine.normalizeId),
     }.length;
 
     if (combinedMedicineCount < 2) {
@@ -157,7 +136,9 @@ class _DrugCheckerScreenState extends State<DrugCheckerScreen> {
     try {
       await _historyRepository.saveInteraction(
         result,
-        medicines: _selectedMedicines,
+        medicines: _selectedMedicines
+            .map((medicine) => medicine.genericName)
+            .toList(),
         profileIncluded: profileIncluded,
       );
     } catch (_) {
@@ -261,13 +242,9 @@ class _DrugCheckerScreenState extends State<DrugCheckerScreen> {
                   ),
                   const SizedBox(height: 18),
                   _CompareMedicinesSection(
-                    controllers: _drugControllers,
+                    medicines: _selectedMedicines,
                     selectedCount: _selectedMedicines.length,
-                    onAddEmpty: () => setState(
-                      () => _drugControllers.add(TextEditingController()),
-                    ),
                     onRemove: _removeMedicine,
-                    onMedicineChanged: () => setState(() {}),
                   ),
                   const SizedBox(height: 14),
                   PrimaryButton(
@@ -611,7 +588,7 @@ class _ProfileSafetyCard extends StatelessWidget {
   });
 
   final HealthProfile profile;
-  final VoidCallback onAddCurrentMedicines;
+  final Future<void> Function() onAddCurrentMedicines;
 
   @override
   Widget build(BuildContext context) {
@@ -704,7 +681,7 @@ class _MedicineSearchSection extends StatelessWidget {
   final TextEditingController controller;
   final Future<List<Medicine>> suggestionsFuture;
   final ValueChanged<String> onSearch;
-  final ValueChanged<String> onAddMedicine;
+  final ValueChanged<Medicine> onAddMedicine;
 
   @override
   Widget build(BuildContext context) {
@@ -735,16 +712,17 @@ class _MedicineSearchSection extends StatelessWidget {
             future: suggestionsFuture,
             builder: (context, snapshot) {
               final medicines = snapshot.data ?? Medicine.demo;
-              return Wrap(
-                spacing: 8,
-                runSpacing: 8,
+              return Column(
                 children: medicines.take(6).map((medicine) {
-                  return MedicineSuggestionChip(
-                    medicine: medicine,
-                    onView: () => context.pushScreen(
-                      MedicineDetailsScreen(name: medicine.name),
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: MedicineSuggestionChip(
+                      medicine: medicine,
+                      onView: () => context.pushScreen(
+                        MedicineDetailsScreen(name: medicine.name),
+                      ),
+                      onAdd: () => onAddMedicine(medicine),
                     ),
-                    onAdd: () => onAddMedicine(medicine.name),
                   );
                 }).toList(),
               );
@@ -770,31 +748,89 @@ class MedicineSuggestionChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: medicine.color.withValues(alpha: .08),
-      borderRadius: BorderRadius.circular(12),
-      child: InkWell(
-        onTap: onView,
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.medication_outlined, size: 18, color: medicine.color),
-              const SizedBox(width: 7),
-              Text(
-                medicine.name,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(width: 4),
-              IconButton(
-                tooltip: 'Add medicine',
-                visualDensity: VisualDensity.compact,
-                onPressed: onAdd,
-                icon: const Icon(Icons.add, size: 18),
-              ),
-            ],
+    final isSmallScreen = MediaQuery.sizeOf(context).width < 360;
+
+    return SizedBox(
+      width: double.infinity,
+      child: Material(
+        color: medicine.color.withValues(alpha: .08),
+        borderRadius: BorderRadius.circular(14),
+        child: InkWell(
+          onTap: onView,
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: isSmallScreen ? 10 : 12,
+              vertical: 10,
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.medication_outlined,
+                  size: isSmallScreen ? 22 : 24,
+                  color: medicine.color,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        medicine.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: isSmallScreen ? 15 : 16,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                      if (medicine.brandNames.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          'Brands: ${medicine.brandNames.join(', ')}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppColors.muted,
+                            fontSize: isSmallScreen ? 11 : 12,
+                            height: 1.25,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 2),
+                      Text(
+                        [
+                          medicine.activeIngredient,
+                          medicine.dosageForm,
+                        ].where((value) => value.isNotEmpty).join(' - '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontSize: isSmallScreen ? 11 : 12,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  tooltip: 'Add medicine',
+                  constraints: const BoxConstraints(
+                    minWidth: 40,
+                    minHeight: 40,
+                  ),
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  onPressed: onAdd,
+                  icon: const Icon(Icons.add, size: 24),
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -804,18 +840,14 @@ class MedicineSuggestionChip extends StatelessWidget {
 
 class _CompareMedicinesSection extends StatelessWidget {
   const _CompareMedicinesSection({
-    required this.controllers,
+    required this.medicines,
     required this.selectedCount,
-    required this.onAddEmpty,
     required this.onRemove,
-    required this.onMedicineChanged,
   });
 
-  final List<TextEditingController> controllers;
+  final List<Medicine> medicines;
   final int selectedCount;
-  final VoidCallback onAddEmpty;
-  final ValueChanged<int> onRemove;
-  final VoidCallback onMedicineChanged;
+  final ValueChanged<String> onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -854,35 +886,45 @@ class _CompareMedicinesSection extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Select at least two medicines, including prescriptions, non-prescription medicines, and supplements.',
+            'Choose reviewed medicines from search suggestions. This keeps the check tied to stable medicine IDs instead of uncontrolled text.',
             style: TextStyle(color: AppColors.muted, height: 1.35),
           ),
           const SizedBox(height: 14),
-          ...controllers.asMap().entries.map(
-            (entry) => Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: MediverseTextField(
-                hint: entry.key == 0
-                    ? 'For example, paracetamol'
-                    : entry.key == 1
-                    ? 'For example, ibuprofen'
-                    : 'Medicine name',
-                controller: entry.value,
-                prefixIcon: Icons.medication_liquid_outlined,
-                suffixIcon: entry.value.text.trim().isNotEmpty
-                    ? Icons.close
-                    : null,
-                suffixIconTooltip: 'Remove medicine',
-                onSuffixIconPressed: () => onRemove(entry.key),
-                onChanged: (_) => onMedicineChanged(),
+          if (medicines.isEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.ocean.withValues(alpha: .06),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: AppColors.ocean.withValues(alpha: .14),
+                ),
               ),
+              child: const Text(
+                'No medicines selected yet. Use the search suggestions above to add medicines.',
+                style: TextStyle(color: AppColors.muted, height: 1.35),
+              ),
+            )
+          else
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: medicines
+                  .map(
+                    (medicine) => InputChip(
+                      avatar: Icon(
+                        Icons.medication_outlined,
+                        color: medicine.color,
+                        size: 18,
+                      ),
+                      label: Text(medicine.genericName),
+                      tooltip: medicine.suggestionSubtitle,
+                      onDeleted: () => onRemove(medicine.id),
+                    ),
+                  )
+                  .toList(),
             ),
-          ),
-          TextButton.icon(
-            onPressed: onAddEmpty,
-            icon: const Icon(Icons.add),
-            label: const Text('Add another medicine'),
-          ),
         ],
       ),
     );

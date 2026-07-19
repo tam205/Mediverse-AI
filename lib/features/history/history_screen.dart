@@ -62,7 +62,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   const Center(child: CircularProgressIndicator())
                 else if (hasError)
                   _HistoryErrorState(
-                    message: friendlyDatabaseMessage(snapshot.error!),
+                    message: friendlyHistoryMessage(snapshot.error!),
                     onRetry: () {
                       setState(() => _historyFuture = _repository.getHistory());
                     },
